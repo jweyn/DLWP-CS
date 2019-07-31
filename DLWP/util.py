@@ -350,3 +350,21 @@ def insolation(dates, lat, lon, S=1.):
     sol[sol < 0.] = 0.
 
     return sol.astype(np.float32)
+
+
+def to_chunked_dataset(ds, chunking):
+    """
+    Create a chunked copy of a Dataset with proper encoding for netCDF export.
+
+    :param ds: xarray.Dataset
+    :param chunking: dict: chunking dictionary as passed to xarray.Dataset.chunk()
+    :return: xarray.Dataset: chunked copy of ds with proper encoding
+    """
+    chunk_dict = dict(ds.dims)
+    chunk_dict.update(chunking)
+    ds_new = ds.chunk(chunk_dict)
+    for var in ds_new.data_vars:
+        ds_new[var].encoding['contiguous'] = False
+        ds_new[var].encoding['original_shape'] = ds_new[var].shape
+        ds_new[var].encoding['chunksizes'] = tuple([c[0] for c in ds_new[var].chunks])
+    return ds_new
