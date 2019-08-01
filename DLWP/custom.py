@@ -16,6 +16,7 @@ from keras.layers import Lambda, Layer
 from keras.losses import mean_absolute_error, mean_squared_error
 from keras.utils import conv_utils
 from keras.engine.base_layer import InputSpec
+from keras import activations, initializers, regularizers, constraints
 import numpy as np
 import tensorflow as tf
 
@@ -681,7 +682,7 @@ def slice_layer(start, end, step=None, axis=1):
     :param step: int: stepping parameter
     :param axis: int: axis along which to slice
     """
-    if axis < 0:
+    if axis < 1:
         raise ValueError("'slice_layer' can only work on a specified axis > 0")
 
     def slice_func(x):
@@ -896,61 +897,316 @@ def row_conv2d(inputs, kernel, kernel_size, strides, output_shape, data_format=N
     return output
 
 
-class LatitudeWeightedLoss(object):
+class CubeSphereConv2D(Layer):
     """
-    Class to create a weighted latitude-dependent loss function for a Keras model.
-    """
-    def __init__(self, loss_function, lats, data_format='channels_last', weighting='cosine'):
-        """
-        Initialize a weighted loss.
+    2D convolutional layer for data that is assumed on a cubed sphere. The requirements for using this layer are as
+    follows:
+    - The input data is 5-dimensional (batch, channels, height, width, 6)
+    - Must follow "channels_first" order
+    - The last dimension must have a length of 6 for the 6 faces of the cubed sphere
+    - The last two faces (indices 4 and 5) are the polar faces
 
-        :param loss_function: method: Keras loss function to apply after the weighting
-        :param lats: ndarray: 1-dimensional array of latitude coordinates
-        :param data_format: Keras data_format ('channels_first' or 'channels_last')
-        :param weighting: str: type of weighting to apply. Options are:
-            cosine: weight by the cosine of the latitude (default)
-            midlatitude: weight by the cosine of the latitude but also apply a 25% reduction to the equator and boost
-                to the mid-latitudes
-        """
-        self.loss_function = loss_function
-        self.lats = lats
+    This layer learns two separate convolutional kernels and biases, one for the equatorial faces of the cube, and one
+    for the polar faces.
+
+    Adapted from keras.layers._Conv by @jweyn
+
+    # Arguments
+        filters: Integer, the dimensionality of the output space
+            (i.e. the number of output filters in the convolution).
+        kernel_size: An integer or tuple/list of n integers, specifying the
+            dimensions of the convolution window.
+        strides: An integer or tuple/list of n integers,
+            specifying the strides of the convolution.
+            Specifying any stride value != 1 is incompatible with specifying
+            any `dilation_rate` value != 1.
+        padding: One of `"valid"` or `"same"` (case-insensitive).
+        data_format: A string,
+            one of `"channels_last"` or `"channels_first"`.
+            The ordering of the dimensions in the inputs.
+            `"channels_last"` corresponds to inputs with shape
+            `(batch, ..., channels)` while `"channels_first"` corresponds to
+            inputs with shape `(batch, channels, ...)`.
+            It defaults to the `image_data_format` value found in your
+            Keras config file at `~/.keras/keras.json`.
+            If you never set it, then it will be "channels_last".
+        dilation_rate: An integer or tuple/list of n integers, specifying
+            the dilation rate to use for dilated convolution.
+            Currently, specifying any `dilation_rate` value != 1 is
+            incompatible with specifying any `strides` value != 1.
+        activation: Activation function to use
+            (see [activations](../activations.md)).
+            If you don't specify anything, no activation is applied
+            (ie. "linear" activation: `a(x) = x`).
+        use_bias: Boolean, whether the layer uses a bias vector.
+        kernel_initializer: Initializer for the `kernel` weights matrix
+            (see [initializers](../initializers.md)).
+        bias_initializer: Initializer for the bias vector
+            (see [initializers](../initializers.md)).
+        kernel_regularizer: Regularizer function applied to
+            the `kernel` weights matrix
+            (see [regularizer](../regularizers.md)).
+        bias_regularizer: Regularizer function applied to the bias vector
+            (see [regularizer](../regularizers.md)).
+        activity_regularizer: Regularizer function applied to
+            the output of the layer (its "activation").
+            (see [regularizer](../regularizers.md)).
+        kernel_constraint: Constraint function applied to the kernel matrix
+            (see [constraints](../constraints.md)).
+        bias_constraint: Constraint function applied to the bias vector
+            (see [constraints](../constraints.md)).
+    """
+
+    def __init__(self,
+                 filters,
+                 kernel_size,
+                 strides=1,
+                 padding='valid',
+                 data_format='channels_first',
+                 dilation_rate=1,
+                 activation=None,
+                 use_bias=True,
+                 kernel_initializer='glorot_uniform',
+                 bias_initializer='zeros',
+                 kernel_regularizer=None,
+                 bias_regularizer=None,
+                 activity_regularizer=None,
+                 kernel_constraint=None,
+                 bias_constraint=None,
+                 **kwargs):
+        super(CubeSphereConv2D, self).__init__(**kwargs)
+        self.filters = filters
+        self.kernel_size = conv_utils.normalize_tuple(kernel_size, 2, 'kernel_size')
+        self.strides = conv_utils.normalize_tuple(strides, 2, 'strides')
+        self.padding = conv_utils.normalize_padding(padding)
         self.data_format = K.normalize_data_format(data_format)
-        if weighting not in ['cosine', 'midlatitude']:
-            raise ValueError("'weighting' must be one of 'cosine' or 'midlatitude'")
-        self.weighting = weighting
-        lat_tensor = K.zeros(lats.shape)
-        print(lats)
-        lat_tensor.assign(K.cast_to_floatx(lats[:]))
-        self.weights = K.cos(lat_tensor * np.pi / 180.)
-        if self.weighting == 'midlatitude':
-            self.weights = self.weights - 0.25 * K.sin(lat_tensor * 2 * np.pi / 180.)
-        self.is_init = False
+        if self.data_format != 'channels_first':
+            raise ValueError("CubeSphereConv2D must have 'channels_first' order")
+        self.dilation_rate = conv_utils.normalize_tuple(dilation_rate, 2, 'dilation_rate')
+        self.activation = activations.get(activation)
+        self.use_bias = use_bias
+        self.kernel_initializer = initializers.get(kernel_initializer)
+        self.bias_initializer = initializers.get(bias_initializer)
+        self.kernel_regularizer = regularizers.get(kernel_regularizer)
+        self.bias_regularizer = regularizers.get(bias_regularizer)
+        self.activity_regularizer = regularizers.get(activity_regularizer)
+        self.kernel_constraint = constraints.get(kernel_constraint)
+        self.bias_constraint = constraints.get(bias_constraint)
+        self.rank = 3
+        self.input_spec = InputSpec(ndim=self.rank + 2)
 
-        self.__name__ = 'latitude_weighted_loss'
+        self.equatorial_kernel = None
+        self.equatorial_bias = None
+        self.polar_kernel = None
+        self.polar_bias = None
 
-    def init_weights(self, shape):
-        if shape[-1] is None:
-            return
-        # Repeat the weights tensor to match the last dimensions of the batch
+    def build(self, input_shape):
+        if self.data_format == 'channels_first':
+            channel_axis = 1
+        else:
+            channel_axis = -1
+        if input_shape[channel_axis] is None:
+            raise ValueError('The channel dimension of the inputs '
+                             'should be defined. Found `None`.')
+        input_dim = input_shape[channel_axis]
+        kernel_shape = self.kernel_size + (input_dim, self.filters)
+
+        self.equatorial_kernel = self.add_weight(shape=kernel_shape,
+                                                 initializer=self.kernel_initializer,
+                                                 name='equatorial_kernel',
+                                                 regularizer=self.kernel_regularizer,
+                                                 constraint=self.kernel_constraint)
+        self.polar_kernel = self.add_weight(shape=kernel_shape,
+                                            initializer=self.kernel_initializer,
+                                            name='polar_kernel',
+                                            regularizer=self.kernel_regularizer,
+                                            constraint=self.kernel_constraint)
+        if self.use_bias:
+            self.equatorial_bias = self.add_weight(shape=(self.filters,),
+                                                   initializer=self.bias_initializer,
+                                                   name='bias',
+                                                   regularizer=self.bias_regularizer,
+                                                   constraint=self.bias_constraint)
+            self.polar_bias = self.add_weight(shape=(self.filters,),
+                                              initializer=self.bias_initializer,
+                                              name='bias',
+                                              regularizer=self.bias_regularizer,
+                                              constraint=self.bias_constraint)
+
+        # Set input spec.
+        self.input_spec = InputSpec(ndim=self.rank + 2,
+                                    axes={channel_axis: input_dim})
+        self.built = True
+
+    def call(self, inputs):
+        outputs = []
+        for f in range(4):
+            outputs.append(
+                K.conv2d(
+                    inputs[..., f],
+                    self.equatorial_kernel,
+                    strides=self.strides,
+                    padding=self.padding,
+                    data_format=self.data_format,
+                    dilation_rate=self.dilation_rate
+                 )
+            )
+            if self.use_bias:
+                outputs[f] = K.bias_add(
+                    outputs[f],
+                    self.equatorial_bias,
+                    data_format=self.data_format
+                )
+            outputs[f] = K.expand_dims(outputs[f], -1)
+        for f in [4, 5]:
+            outputs.append(
+                K.conv2d(
+                    inputs[..., f],
+                    self.polar_kernel,
+                    strides=self.strides,
+                    padding=self.padding,
+                    data_format=self.data_format,
+                    dilation_rate=self.dilation_rate
+                )
+            )
+            if self.use_bias:
+                outputs[f] = K.bias_add(
+                    outputs[f],
+                    self.polar_bias,
+                    data_format=self.data_format
+                )
+            outputs[f] = K.expand_dims(outputs[f], -1)
+
+        outputs = K.concatenate(outputs, axis=-1)
+
+        if self.activation is not None:
+            return self.activation(outputs)
+        return outputs
+
+    def compute_output_shape(self, input_shape):
         if self.data_format == 'channels_last':
-            self.weights = K.expand_dims(self.weights, axis=1)
-            self.weights = K.repeat_elements(self.weights, shape[-1], axis=1)
-        else:
-            self.weights = K.expand_dims(self.weights, axis=1)
-            self.weights = K.repeat_elements(self.weights, shape[-2], axis=1)
-            self.weights = K.expand_dims(self.weights, axis=2)
-            self.weights = K.repeat_elements(self.weights, shape[-1], axis=2)
-        self.is_init = True
+            space = input_shape[1:-3]
+            new_space = []
+            for i in range(len(space)):
+                new_dim = conv_utils.conv_output_length(
+                    space[i],
+                    self.kernel_size[i],
+                    padding=self.padding,
+                    stride=self.strides[i],
+                    dilation=self.dilation_rate[i])
+                new_space.append(new_dim)
+            return (input_shape[0],) + tuple(new_space) + (self.filters, 6)
+        if self.data_format == 'channels_first':
+            space = input_shape[2:-1]
+            new_space = []
+            for i in range(len(space)):
+                new_dim = conv_utils.conv_output_length(
+                    space[i],
+                    self.kernel_size[i],
+                    padding=self.padding,
+                    stride=self.strides[i],
+                    dilation=self.dilation_rate[i])
+                new_space.append(new_dim)
+            return (input_shape[0], self.filters) + tuple(new_space) + (6,)
 
-    def __call__(self, y_true, y_pred):
-        # Check that the weights array has been initialized to fit the dimensions
-        if not self.is_init:
-            self.init_weights(K.int_shape(y_true))
-        if self.is_init:
-            loss = self.loss_function(y_true * self.weights, y_pred * self.weights)
-        else:
-            loss = self.loss_function(y_true, y_pred)
-        return loss
+    def get_config(self):
+        config = {
+            'filters': self.filters,
+            'kernel_size': self.kernel_size,
+            'strides': self.strides,
+            'padding': self.padding,
+            'data_format': self.data_format,
+            'dilation_rate': self.dilation_rate,
+            'activation': activations.serialize(self.activation),
+            'use_bias': self.use_bias,
+            'kernel_initializer': initializers.serialize(self.kernel_initializer),
+            'bias_initializer': initializers.serialize(self.bias_initializer),
+            'kernel_regularizer': regularizers.serialize(self.kernel_regularizer),
+            'bias_regularizer': regularizers.serialize(self.bias_regularizer),
+            'activity_regularizer':
+                regularizers.serialize(self.activity_regularizer),
+            'kernel_constraint': constraints.serialize(self.kernel_constraint),
+            'bias_constraint': constraints.serialize(self.bias_constraint)
+        }
+        base_config = super(CubeSphereConv2D, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
+
+
+class CubeSpherePadding2D(ZeroPadding3D):
+    """
+    Padding layer for 2D data on a cubed sphere. The requirements for using this layer are as follows:
+    - The input data is 5-dimensional (batch, channels, height, width, 6)
+    - Must follow "channels_first" order
+    - The last dimension must have a length of 6 for the 6 faces of the cubed sphere
+    - The last two faces (indices 4 and 5) are the polar faces
+
+    Adapted from keras.layers.ZeroPadding3D by @jweyn
+
+    # Arguments
+        padding: int
+        data_format: 'channels_first'
+    """
+
+    def __init__(self,
+                 padding=1,
+                 data_format='channels_first',
+                 **kwargs):
+        data_format = K.normalize_data_format(data_format)
+        if data_format != 'channels_first':
+            raise ValueError("CubeSpherePadding2D must have 'channels_first' order")
+        super(CubeSpherePadding2D, self).__init__(padding=padding,
+                                                  data_format=data_format,
+                                                  **kwargs)
+        self.padding = self.padding[:2] + ((0, 0),)
+
+    def call(self, inputs):
+        shape = K.int_shape(inputs)
+        outputs = K.spatial_3d_padding(inputs, padding=self.padding, data_format=self.data_format)
+
+        # Interrupt if we are just testing the layer with a None dimension
+        if None in shape:
+            return outputs
+
+        sl = slice(self.padding[0][0], shape[-2] - 1 + 2 * self.padding[0][0])
+        isl = slice(shape[-2] - 1 + 2 * self.padding[0][0], self.padding[0][0], -1)
+
+        # Face 1
+        outputs = outputs[:, :, sl, 0, 0].assign(inputs[:, :, :, -1, 3])
+        outputs = outputs[:, :, sl, -1, 0].assign(inputs[:, :, :, 0, 1])
+        outputs = outputs[:, :, 0, sl, 0].assign(inputs[:, :, -1, :, 4])
+        outputs = outputs[:, :, -1, sl, 0].assign(inputs[:, :, 0, :, 5])
+
+        # Face 2
+        outputs = outputs[:, :, sl, 0, 1].assign(inputs[:, :, :, -1, 0])
+        outputs = outputs[:, :, sl, -1, 1].assign(inputs[:, :, :, 0, 2])
+        outputs = outputs[:, :, 0, sl, 1].assign(inputs[:, :, ::-1, -1, 4])
+        outputs = outputs[:, :, -1, sl, 1].assign(inputs[:, :, :, -1, 5])
+
+        # Face 3
+        outputs = outputs[:, :, sl, 0, 2].assign(inputs[:, :, :, -1, 1])
+        outputs = outputs[:, :, sl, -1, 2].assign(inputs[:, :, :, 0, 3])
+        outputs = outputs[:, :, 0, sl, 2].assign(inputs[:, :, 0, ::-1, 4])
+        outputs = outputs[:, :, -1, sl, 2].assign(inputs[:, :, -1, ::-1, 5])
+
+        # Face 4
+        outputs = outputs[:, :, sl, 0, 3].assign(inputs[:, :, :, -1, 2])
+        outputs = outputs[:, :, sl, -1, 3].assign(inputs[:, :, :, 0, 0])
+        outputs = outputs[:, :, 0, sl, 3].assign(inputs[:, :, :, 0, 4])
+        outputs = outputs[:, :, -1, sl, 3].assign(inputs[:, :, ::-1, 0, 5])
+
+        # Face 5
+        outputs = outputs[:, :, -1, sl, 4].assign(inputs[:, :, 0, :, 0])
+        outputs = outputs[:, :, isl, -1, 4].assign(inputs[:, :, 0, :, 1])
+        outputs = outputs[:, :, 0, isl, 4].assign(inputs[:, :, 0, :, 2])
+        outputs = outputs[:, :, sl, 0, 4].assign(inputs[:, :, 0, :, 3])
+
+        # Face 6
+        outputs = outputs[:, :, 0, sl, 5].assign(inputs[:, :, -1, :, 0])
+        outputs = outputs[:, :, sl, -1, 5].assign(inputs[:, :, -1, :, 1])
+        outputs = outputs[:, :, -1, isl, 5].assign(inputs[:, :, -1, :, 2])
+        outputs = outputs[:, :, isl, 0, 5].assign(inputs[:, :, -1, :, 3])
+
+        return outputs
 
 
 def latitude_weighted_loss(loss_function=mean_squared_error, lats=None, output_shape=(), axis=-2, weighting='cosine'):

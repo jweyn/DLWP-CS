@@ -217,6 +217,8 @@ class CubeSphereRemap(_BaseRemap):
         """
         # Open the dataset to convert
         ds = xr.open_dataset(input_file)
+        print('CubeSphereRemap: loading data to memory')
+        ds.load()
 
         # First, assign any coordinates missing from the input file from the coordinate file, if provided.
         if coord_file is not None:

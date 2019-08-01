@@ -331,7 +331,7 @@ class SeriesDataGenerator(Sequence):
     solar radiation, to the inputs.
     """
 
-    def __init__(self, model, ds, input_sel=None, output_sel=None, input_time_steps=1, output_time_steps=1,
+    def __init__(self, model, ds, rank=2, input_sel=None, output_sel=None, input_time_steps=1, output_time_steps=1,
                  sequence=None, interval=1, add_insolation=False, batch_size=32, shuffle=False, remove_nan=True,
                  load='required'):
         """
@@ -339,6 +339,7 @@ class SeriesDataGenerator(Sequence):
 
         :param model: instance of a DLWP model
         :param ds: xarray Dataset: predictor dataset. Should have attribute 'predictors'.
+        :param rank: int: the number of spatial dimensions (e.g. 2 for 2-d data and convolutions)
         :param input_sel: dict: variable/level selection for input features
         :param output_sel: dict: variable/level selection for output features
         :param input_time_steps: int: number of time steps in the input features
@@ -362,6 +363,7 @@ class SeriesDataGenerator(Sequence):
         self.model = model
         if not hasattr(ds, 'predictors'):
             raise ValueError("dataset must have 'predictors' variable")
+        assert int(rank) > 0
         assert int(input_time_steps) > 0
         assert int(output_time_steps) > 0
         assert int(batch_size) > 0
@@ -396,6 +398,7 @@ class SeriesDataGenerator(Sequence):
         else:
             self.da = self.ds.predictors
 
+        self.rank = rank
         self._input_sel = input_sel or {}
         self._output_sel = output_sel or {}
         self._input_time_steps = input_time_steps
@@ -434,7 +437,8 @@ class SeriesDataGenerator(Sequence):
         """
         :return: int: the number of input features; includes insolation
         """
-        return int(np.prod(self.shape)) + int(np.prod(self.shape[-2:])) * self._input_time_steps * self._add_insolation
+        return int(np.prod(self.shape)) + int(np.prod(self.shape[-self.rank:])) \
+            * self._input_time_steps * self._add_insolation
 
     @property
     def dense_shape(self):
@@ -454,10 +458,11 @@ class SeriesDataGenerator(Sequence):
             (time_step, channels, y, x); if not, (channels, y, x). Includes insolation.
         """
         if self._keep_time_axis:
-            return (self._input_time_steps,) + (int(np.prod(self.shape[1:-2]))+self._add_insolation,) + self.shape[-2:]
+            return (self._input_time_steps,) + (int(np.prod(self.shape[1:-self.rank])) + self._add_insolation,)\
+                + self.shape[-self.rank:]
         else:
-            return (int(np.prod(self.shape[:-2])) +
-                    self._input_time_steps * self._add_insolation,) + self.input_da.shape[-2:]
+            return (int(np.prod(self.shape[:-self.rank])) +
+                    self._input_time_steps * self._add_insolation,) + self.input_da.shape[-self.rank:]
 
     @property
     def shape_2d(self):
@@ -504,9 +509,10 @@ class SeriesDataGenerator(Sequence):
             recurrent, (time_step, channels, y, x); if not, (channels, y, x).
         """
         if self._keep_time_axis:
-            return (self._output_time_steps,) + (int(np.prod(self.output_shape[1:-2])),) + self.output_shape[-2:]
+            return (self._output_time_steps,) + (int(np.prod(self.output_shape[1:-self.rank])),) \
+                + self.output_shape[-self.rank:]
         else:
-            return (int(np.prod(self.output_shape[:-2])),) + self.output_da.shape[-2:]
+            return (int(np.prod(self.output_shape[:-self.rank])),) + self.output_da.shape[-self.rank:]
 
     @property
     def output_shape_2d(self):
