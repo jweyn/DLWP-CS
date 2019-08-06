@@ -939,6 +939,9 @@ class CubeSphereConv2D(Layer):
             If you don't specify anything, no activation is applied
             (ie. "linear" activation: `a(x) = x`).
         use_bias: Boolean, whether the layer uses a bias vector.
+        flip_north_pole: Boolean, whether to reverse the direction of the
+            north pole should that be necessary to match the rotation
+            direction of the south pole in the data
         kernel_initializer: Initializer for the `kernel` weights matrix
             (see [initializers](../initializers.md)).
         bias_initializer: Initializer for the bias vector
@@ -966,6 +969,7 @@ class CubeSphereConv2D(Layer):
                  dilation_rate=1,
                  activation=None,
                  use_bias=True,
+                 flip_north_pole=True,
                  kernel_initializer='glorot_uniform',
                  bias_initializer='zeros',
                  kernel_regularizer=None,
@@ -985,6 +989,7 @@ class CubeSphereConv2D(Layer):
         self.dilation_rate = conv_utils.normalize_tuple(dilation_rate, 2, 'dilation_rate')
         self.activation = activations.get(activation)
         self.use_bias = use_bias
+        self.flip_north_pole = flip_north_pole
         self.kernel_initializer = initializers.get(kernel_initializer)
         self.bias_initializer = initializers.get(bias_initializer)
         self.kernel_regularizer = regularizers.get(kernel_regularizer)
@@ -1040,6 +1045,8 @@ class CubeSphereConv2D(Layer):
 
     def call(self, inputs):
         outputs = []
+
+        # Equatorial faces
         for f in range(4):
             outputs.append(
                 K.conv2d(
@@ -1058,24 +1065,48 @@ class CubeSphereConv2D(Layer):
                     data_format=self.data_format
                 )
             outputs[f] = K.expand_dims(outputs[f], -1)
-        for f in [4, 5]:
-            outputs.append(
-                K.conv2d(
-                    inputs[..., f],
-                    self.polar_kernel,
-                    strides=self.strides,
-                    padding=self.padding,
-                    data_format=self.data_format,
-                    dilation_rate=self.dilation_rate
-                )
+
+        # South pole face
+        outputs.append(
+            K.conv2d(
+                inputs[..., 4],
+                self.polar_kernel,
+                strides=self.strides,
+                padding=self.padding,
+                data_format=self.data_format,
+                dilation_rate=self.dilation_rate
             )
-            if self.use_bias:
-                outputs[f] = K.bias_add(
-                    outputs[f],
-                    self.polar_bias,
-                    data_format=self.data_format
-                )
-            outputs[f] = K.expand_dims(outputs[f], -1)
+        )
+        if self.use_bias:
+            outputs[4] = K.bias_add(
+                outputs[4],
+                self.polar_bias,
+                data_format=self.data_format
+            )
+        outputs[4] = K.expand_dims(outputs[4], -1)
+
+        # North pole face
+        if self.flip_north_pole:
+            sl = slice(None, None, -1)
+        else:
+            sl = slice(None)
+        outputs.append(
+            K.conv2d(
+                inputs[..., sl, :, 5],
+                self.polar_kernel,
+                strides=self.strides,
+                padding=self.padding,
+                data_format=self.data_format,
+                dilation_rate=self.dilation_rate
+            )
+        )
+        if self.use_bias:
+            outputs[5] = K.bias_add(
+                outputs[5],
+                self.polar_bias,
+                data_format=self.data_format
+            )
+        outputs[5] = K.expand_dims(outputs[5], -1)
 
         outputs = K.concatenate(outputs, axis=-1)
 
@@ -1119,6 +1150,7 @@ class CubeSphereConv2D(Layer):
             'dilation_rate': self.dilation_rate,
             'activation': activations.serialize(self.activation),
             'use_bias': self.use_bias,
+            'flip_north_pole': self.flip_north_pole,
             'kernel_initializer': initializers.serialize(self.kernel_initializer),
             'bias_initializer': initializers.serialize(self.bias_initializer),
             'kernel_regularizer': regularizers.serialize(self.kernel_regularizer),

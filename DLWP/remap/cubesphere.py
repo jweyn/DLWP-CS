@@ -262,6 +262,8 @@ class CubeSphereRemap(_BaseRemap):
         """
         # Open the dataset to convert
         ds = xr.open_dataset(input_file)
+        print('CubeSphereRemap: loading data to memory')
+        ds.load()
 
         # Transpose the face dimension and stack the face, height, width
         fhw = ('face', 'height', 'width')

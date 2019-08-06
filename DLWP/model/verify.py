@@ -169,16 +169,20 @@ def predictors_to_time_series(predictors, time_steps, has_time_dim=True, use_fir
     return result
 
 
-def add_metadata_to_forecast(forecast, f_hour, meta_ds):
+def add_metadata_to_forecast(forecast, f_hour, meta_ds, f_hour_timedelta_type=True):
     """
     Add metadata to a forecast based on the initialization times and coordinates in meta_ds.
 
     :param forecast: ndarray: (forecast_hour, time, variable, lat, lon)
     :param f_hour: iterable: forecast hour coordinate values
     :param meta_ds: xarray Dataset: contains metadata for time, variable, lat, and lon
+    :param f_hour_timedelta_type: bool: if True, converts f_hour dimension into a timedelta type. May not always be
+        compatible with netCDF applications.
     :return: xarray.DataArray: array with metadata
     """
     nf = len(f_hour)
+    if f_hour_timedelta_type:
+        f_hour = np.array(f_hour).astype('timedelta64[h]')
     if nf != forecast.shape[0]:
         raise ValueError("'f_hour' coordinate must have same size as the first axis of 'forecast'")
     if 'level' in meta_ds.dims:
@@ -187,18 +191,56 @@ def add_metadata_to_forecast(forecast, f_hour, meta_ds):
         forecast = xr.DataArray(
             forecast,
             coords=[f_hour, meta_ds.sample, meta_ds.variable, meta_ds.level, meta_ds.lat, meta_ds.lon],
-            dims=['f_hour', 'time', 'variable', 'level', 'lat', 'lon']
+            dims=['f_hour', 'time', 'variable', 'level', 'lat', 'lon'],
+            name='forecast'
         )
     else:
         forecast = xr.DataArray(
             forecast,
             coords=[f_hour, meta_ds.sample, meta_ds.varlev, meta_ds.lat, meta_ds.lon],
-            dims=['f_hour', 'time', 'varlev', 'lat', 'lon']
+            dims=['f_hour', 'time', 'varlev', 'lat', 'lon'],
+            name='forecast'
         )
     return forecast
 
 
-def verification_from_samples(ds, all_ds=None, forecast_steps=1, dt=6):
+def add_metadata_to_forecast_cs(forecast, f_hour, meta_ds, f_hour_timedelta_type=False):
+    """
+    Add metadata to a forecast based on the initialization times and coordinates in meta_ds, which is on a cubed sphere.
+
+    :param forecast: ndarray: (forecast_hour, time, variable, height, width, face)
+    :param f_hour: iterable: forecast hour coordinate values
+    :param meta_ds: xarray Dataset: contains metadata for time, variable, height, width, and face
+    :param f_hour_timedelta_type: bool: if True, converts f_hour dimension into a timedelta type. May not always be
+        compatible with netCDF applications.
+    :return: xarray.DataArray: array with metadata
+    """
+    nf = len(f_hour)
+    if f_hour_timedelta_type:
+        f_hour = np.array(f_hour).astype('timedelta64[h]')
+    if nf != forecast.shape[0]:
+        raise ValueError("'f_hour' coordinate must have same size as the first axis of 'forecast'")
+    if 'level' in meta_ds.dims:
+        forecast = forecast.reshape((nf, meta_ds.dims['sample'], meta_ds.dims['variable'], meta_ds.dims['level'],
+                                     meta_ds.dims['height'], meta_ds.dims['width'], meta_ds.dims['face']))
+        forecast = xr.DataArray(
+            forecast,
+            coords=[f_hour, meta_ds.sample, meta_ds.variable, meta_ds.level,
+                    meta_ds.height, meta_ds.width, meta_ds.face],
+            dims=['f_hour', 'time', 'variable', 'level', 'height', 'width', 'face'],
+            name='forecast'
+        )
+    else:
+        forecast = xr.DataArray(
+            forecast,
+            coords=[f_hour, meta_ds.sample, meta_ds.varlev, meta_ds.height, meta_ds.width, meta_ds.face],
+            dims=['f_hour', 'time', 'varlev', 'height', 'width', 'face'],
+            name='forecast'
+        )
+    return forecast
+
+
+def verification_from_samples(ds, all_ds=None, forecast_steps=1, dt=6, f_hour_timedelta_type=True):
     """
     Generate a DataArray of forecast verification from a validation DataSet built using Preprocessor.data_to_samples().
 
@@ -207,6 +249,8 @@ def verification_from_samples(ds, all_ds=None, forecast_steps=1, dt=6):
         including more time steps for more robust handling of data at times outside of the validation selection
     :param forecast_steps: int: number of forward forecast iterations
     :param dt: int: forecast time step in hours
+    :param f_hour_timedelta_type: bool: if True, converts f_hour dimension into a timedelta type. May not always be
+        compatible with netCDF applications.
     :return: xarray.DataArray: verification with forecast hour as the first dimension
     """
     forecast_steps = int(forecast_steps)
@@ -216,11 +260,14 @@ def verification_from_samples(ds, all_ds=None, forecast_steps=1, dt=6):
     if dt < 1:
         raise ValueError("'dt' must be an integer >= 1")
     dims = [d for d in ds.predictors.dims if d.lower() != 'time_step']
-    f_hour = np.arange(dt, dt * forecast_steps + 1, dt).astype('timedelta64[h]')
+    f_hour = np.arange(dt, dt * forecast_steps + 1, dt)
+    if f_hour_timedelta_type:
+        f_hour = np.array(f_hour).astype('timedelta64[h]')
     verification = xr.DataArray(
         np.full([forecast_steps] + [ds.dims[d] for d in dims], np.nan, dtype=np.float32),
         coords=[f_hour] + [ds[d] for d in dims],
-        dims=['f_hour'] + dims
+        dims=['f_hour'] + dims,
+        name='verification'
     )
     if all_ds is not None:
         valid_da = all_ds.targets.isel(time_step=0)
@@ -235,7 +282,7 @@ def verification_from_samples(ds, all_ds=None, forecast_steps=1, dt=6):
     return verification.rename({'sample': 'time'})
 
 
-def verification_from_series(ds, all_ds=None, forecast_steps=1, dt=6):
+def verification_from_series(ds, all_ds=None, forecast_steps=1, dt=6, f_hour_timedelta_type=True):
     """
     Generate a DataArray of forecast verification from a validation DataSet built using Preprocessor.data_to_series().
 
@@ -244,6 +291,8 @@ def verification_from_series(ds, all_ds=None, forecast_steps=1, dt=6):
         including more time steps for more robust handling of data at times outside of the validation selection
     :param forecast_steps: int: number of forward forecast iterations
     :param dt: int: forecast time step in hours
+    :param f_hour_timedelta_type: bool: if True, converts f_hour dimension into a timedelta type. May not always be
+        compatible with netCDF applications.
     :return: xarray.DataArray: verification with forecast hour as the first dimension
     """
     forecast_steps = int(forecast_steps)
@@ -253,11 +302,14 @@ def verification_from_series(ds, all_ds=None, forecast_steps=1, dt=6):
     if dt < 1:
         raise ValueError("'dt' must be an integer >= 1")
     dims = [d for d in ds.predictors.dims if d.lower() != 'time_step']
-    f_hour = np.arange(dt, dt * forecast_steps + 1, dt).astype('timedelta64[h]')
+    f_hour = np.arange(dt, dt * forecast_steps + 1, dt)
+    if f_hour_timedelta_type:
+        f_hour = np.array(f_hour).astype('timedelta64[h]')
     verification = xr.DataArray(
         np.full([forecast_steps] + [ds.dims[d] for d in dims], np.nan, dtype=np.float32),
         coords=[f_hour] + [ds[d] for d in dims],
-        dims=['f_hour'] + dims
+        dims=['f_hour'] + dims,
+        name='verification'
     )
     if all_ds is not None:
         valid_da = all_ds.predictors
