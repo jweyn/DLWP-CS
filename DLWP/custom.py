@@ -1087,25 +1087,35 @@ class CubeSphereConv2D(Layer):
 
         # North pole face
         if self.flip_north_pole:
-            sl = slice(None, None, -1)
-        else:
-            sl = slice(None)
-        outputs.append(
-            K.conv2d(
-                inputs[..., sl, :, 5],
-                self.polar_kernel,
-                strides=self.strides,
-                padding=self.padding,
-                data_format=self.data_format,
-                dilation_rate=self.dilation_rate
+            outputs.append(
+                K.conv2d(
+                    K.reverse(inputs[..., 5], -2),
+                    self.polar_kernel,
+                    strides=self.strides,
+                    padding=self.padding,
+                    data_format=self.data_format,
+                    dilation_rate=self.dilation_rate
+                )
             )
-        )
+        else:
+            outputs.append(
+                K.conv2d(
+                    inputs[..., 5],
+                    self.polar_kernel,
+                    strides=self.strides,
+                    padding=self.padding,
+                    data_format=self.data_format,
+                    dilation_rate=self.dilation_rate
+                )
+            )
         if self.use_bias:
             outputs[5] = K.bias_add(
                 outputs[5],
                 self.polar_bias,
                 data_format=self.data_format
             )
+        if self.flip_north_pole:
+            outputs[5] = K.reverse(outputs[5], -2)
         outputs[5] = K.expand_dims(outputs[5], -1)
 
         outputs = K.concatenate(outputs, axis=-1)
@@ -1189,6 +1199,10 @@ class CubeSpherePadding2D(ZeroPadding3D):
         super(CubeSpherePadding2D, self).__init__(padding=padding,
                                                   data_format=data_format,
                                                   **kwargs)
+        if self.padding[0] != self.padding[1]:
+            raise ValueError("CubeSpherePadding2D must have the same padding in the height and width dimensions")
+        if self.padding[0][0] != self.padding[0][1]:
+            raise ValueError("CubeSpherePadding2D must have equal padding on opposite edges")
         self.padding = self.padding[:2] + ((0, 0),)
 
     def call(self, inputs):
@@ -1199,44 +1213,49 @@ class CubeSpherePadding2D(ZeroPadding3D):
         if None in shape:
             return outputs
 
-        sl = slice(self.padding[0][0], shape[-2] - 1 + 2 * self.padding[0][0])
-        isl = slice(shape[-2] - 1 + 2 * self.padding[0][0], self.padding[0][0], -1)
+        p = self.padding[0][0]
+        tr = (0, 1, 3, 2)
+        sl = slice(p, shape[-2] + p)
 
+        # Pad the equatorial upper/lower boundaries
         # Face 1
-        outputs = outputs[:, :, sl, 0, 0].assign(inputs[:, :, :, -1, 3])
-        outputs = outputs[:, :, sl, -1, 0].assign(inputs[:, :, :, 0, 1])
-        outputs = outputs[:, :, 0, sl, 0].assign(inputs[:, :, -1, :, 4])
-        outputs = outputs[:, :, -1, sl, 0].assign(inputs[:, :, 0, :, 5])
-
+        outputs = outputs[:, :, :p, sl, 0].assign(inputs[:, :, -p:, :, 4])
+        outputs = outputs[:, :, -p:, sl, 0].assign(inputs[:, :, :p, :, 5])
         # Face 2
-        outputs = outputs[:, :, sl, 0, 1].assign(inputs[:, :, :, -1, 0])
-        outputs = outputs[:, :, sl, -1, 1].assign(inputs[:, :, :, 0, 2])
-        outputs = outputs[:, :, 0, sl, 1].assign(inputs[:, :, ::-1, -1, 4])
-        outputs = outputs[:, :, -1, sl, 1].assign(inputs[:, :, :, -1, 5])
-
+        outputs = outputs[:, :, :p, sl, 1].assign(tf.transpose(inputs[:, :, ::-1, -p:, 4], tr))
+        outputs = outputs[:, :, -p:, sl, 1].assign(tf.transpose(K.reverse(inputs[:, :, :, -p:, 5], 2), tr))
         # Face 3
-        outputs = outputs[:, :, sl, 0, 2].assign(inputs[:, :, :, -1, 1])
-        outputs = outputs[:, :, sl, -1, 2].assign(inputs[:, :, :, 0, 3])
-        outputs = outputs[:, :, 0, sl, 2].assign(inputs[:, :, 0, ::-1, 4])
-        outputs = outputs[:, :, -1, sl, 2].assign(inputs[:, :, -1, ::-1, 5])
-
+        outputs = outputs[:, :, :p, sl, 2].assign(K.reverse(inputs[:, :, :p, ::-1, 4], 2))
+        outputs = outputs[:, :, -p:, sl, 2].assign(K.reverse(inputs[:, :, -p:, ::-1, 5], 2))
         # Face 4
-        outputs = outputs[:, :, sl, 0, 3].assign(inputs[:, :, :, -1, 2])
-        outputs = outputs[:, :, sl, -1, 3].assign(inputs[:, :, :, 0, 0])
-        outputs = outputs[:, :, 0, sl, 3].assign(inputs[:, :, :, 0, 4])
-        outputs = outputs[:, :, -1, sl, 3].assign(inputs[:, :, ::-1, 0, 5])
+        outputs = outputs[:, :, :p, sl, 3].assign(tf.transpose(K.reverse(inputs[:, :, :, :p, 4], 2), tr))
+        outputs = outputs[:, :, -p:, sl, 3].assign(tf.transpose(inputs[:, :, ::-1, :p, 5], tr))
 
-        # Face 5
-        outputs = outputs[:, :, -1, sl, 4].assign(inputs[:, :, 0, :, 0])
-        outputs = outputs[:, :, isl, -1, 4].assign(inputs[:, :, 0, :, 1])
-        outputs = outputs[:, :, 0, isl, 4].assign(inputs[:, :, 0, :, 2])
-        outputs = outputs[:, :, sl, 0, 4].assign(inputs[:, :, 0, :, 3])
+        # Pad the equatorial periodic lateral boundaries, now in the outputs at columns 2
+        # Face 1
+        outputs = outputs[:, :, :, :p, 0].assign(outputs[:, :, :, -2*p:-p, 3])
+        outputs = outputs[:, :, :, -p:, 0].assign(outputs[:, :, :, p:2*p, 1])
+        # Face 2
+        outputs = outputs[:, :, :, :p, 1].assign(outputs[:, :, :, -2*p:-p, 0])
+        outputs = outputs[:, :, :, -p:, 1].assign(outputs[:, :, :, p:2*p, 2])
+        # Face 3
+        outputs = outputs[:, :, :, :p, 2].assign(outputs[:, :, :, -2*p:-p, 1])
+        outputs = outputs[:, :, :, -p:, 2].assign(outputs[:, :, :, p:2*p, 3])
+        # Face 4
+        outputs = outputs[:, :, :, :p, 3].assign(outputs[:, :, :, -2*p:-p, 2])
+        outputs = outputs[:, :, :, -p:, 3].assign(outputs[:, :, :, p:2*p, 0])
 
-        # Face 6
-        outputs = outputs[:, :, 0, sl, 5].assign(inputs[:, :, -1, :, 0])
-        outputs = outputs[:, :, sl, -1, 5].assign(inputs[:, :, -1, :, 1])
-        outputs = outputs[:, :, -1, isl, 5].assign(inputs[:, :, -1, :, 2])
-        outputs = outputs[:, :, isl, 0, 5].assign(inputs[:, :, -1, :, 3])
+        # Pad the polar boundaries with new equatorial faces, again rows 2
+        # South pole face 5
+        outputs = outputs[:, :, -p:, :, 4].assign(outputs[:, :, p:2*p, :, 0])
+        outputs = outputs[:, :, ::-1, -p:, 4].assign(tf.transpose(outputs[:, :, p:2*p, :, 1], tr))
+        outputs = outputs[:, :, :p, ::-1, 4].assign(K.reverse(outputs[:, :, p:2*p, :, 2], 2))
+        outputs = outputs[:, :, :, :p, 4].assign(K.reverse(tf.transpose(outputs[:, :, p:2*p, :, 3], tr), 2))
+        # North pole face 6
+        outputs = outputs[:, :, :p, :, 5].assign(outputs[:, :, -2*p:-p, :, 0])
+        outputs = outputs[:, :, :, -p:, 5].assign(tf.transpose(K.reverse(outputs[:, :, -2*p:-p, :, 1], 2), tr))
+        outputs = outputs[:, :, -p:, ::-1, 5].assign(K.reverse(outputs[:, :, -2*p:-p, :, 2], 2))
+        outputs = outputs[:, :, ::-1, :p, 5].assign(tf.transpose(outputs[:, :, -2*p:-p, :, 3], tr))
 
         return outputs
 
