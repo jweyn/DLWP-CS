@@ -100,17 +100,19 @@ class RNNResetStates(Callback):
 class EarlyStoppingMin(EarlyStopping):
     """
     Extends the keras.callbacks.EarlyStopping class to provide the option to force training for a minimum number of
-    epochs.
+    epochs or restore the best weights after the maximum epochs have been reached.
     """
-    def __init__(self, min_epochs=0, **kwargs):
+    def __init__(self, min_epochs=0, max_epochs=None, **kwargs):
         """
         :param min_epochs: int: train the network for at least this number of epochs before early stopping
+        :param max_epochs: int: train the network for at most this number of epochs before early stopping
         :param kwargs: passed to EarlyStopping.__init__()
         """
         super(EarlyStoppingMin, self).__init__(**kwargs)
         if not isinstance(min_epochs, int) or min_epochs < 0:
             raise ValueError('min_epochs must be an integer >= 0')
-        self.min_epochs = min_epochs
+        self.min_epochs = int(min_epochs)
+        self.max_epochs = int(max_epochs) if max_epochs is not None else None
 
     def on_epoch_end(self, epoch, logs=None):
         if epoch < self.min_epochs:
@@ -135,6 +137,15 @@ class EarlyStoppingMin(EarlyStopping):
                         print('Restoring model weights from the end of '
                               'the best epoch')
                     self.model.set_weights(self.best_weights)
+
+        if self.max_epochs is not None and epoch >= self.max_epochs:
+            self.stopped_epoch = epoch
+            self.model.stop_training = True
+            if self.restore_best_weights:
+                if self.verbose > 0:
+                    print('Maximum epochs reached; restoring model weights from the end of '
+                          'the best epoch')
+                self.model.set_weights(self.best_weights)
 
 
 # ==================================================================================================================== #
@@ -990,16 +1001,8 @@ class CubeSpherePadding2D(ZeroPadding3D):
         self.padding = self.padding[:2] + ((0, 0),)
 
     def call(self, inputs):
-        shape = K.int_shape(inputs)
-        outputs = K.spatial_3d_padding(inputs, padding=self.padding, data_format=self.data_format)
-
-        # # Interrupt if we are just testing the layer with a None dimension
-        # if None in shape:
-        #     return outputs
-
         p = self.padding[0][0]
         tr = (0, 1, 3, 2)
-        sl = slice(p, shape[-2] + p)
 
         # Pad the equatorial upper/lower boundaries and the polar upper/lower boundaries
         out = list()
@@ -1016,7 +1019,7 @@ class CubeSpherePadding2D(ZeroPadding3D):
             K.concatenate([
                 tf.transpose(inputs[:, :, ::-1, -p:, 4], tr),
                 inputs[..., 1],
-                tf.transpose(K.reverse(inputs[:, :, ::-1, -p:, 5], 2), tr)
+                tf.transpose(K.reverse(inputs[:, :, :, -p:, 5], 3), tr)
             ], axis=2), -1
         ))
         # Face 2
@@ -1030,7 +1033,7 @@ class CubeSpherePadding2D(ZeroPadding3D):
         # Face 3
         out.append(K.expand_dims(
             K.concatenate([
-                tf.transpose(K.reverse(inputs[:, :, ::-1, :p, 4], 2), tr),
+                tf.transpose(K.reverse(inputs[:, :, :, :p, 4], 3), tr),
                 inputs[..., 3],
                 tf.transpose(inputs[:, :, ::-1, :p, 5], tr)
             ], axis=2), -1
@@ -1093,65 +1096,23 @@ class CubeSpherePadding2D(ZeroPadding3D):
         # Face 4
         out.append(K.expand_dims(
             K.concatenate([
-                K.reverse(tf.transpose(out[3][:, :, :p, ::-1, 0], tr), 2),
+                tf.transpose(K.reverse(out[3][:, :, p:2*p, :, 0], 2), tr),
                 out1[..., 4],
-                tf.transpose(out[1][:, :, :p, ::-1, 0], tr)
+                tf.transpose(out[1][:, :, p:2*p, ::-1, 0], tr)
             ], axis=3), -1
         ))
         # Face 5
         out.append(K.expand_dims(
             K.concatenate([
-                tf.transpose(out[3][:, :, -p:, ::-1, 0], tr),
+                tf.transpose(out[3][:, :, -2*p:-p, ::-1, 0], tr),
                 out1[..., 5],
-                tf.transpose(K.reverse(out[1][:, :, -p:, :, 0], 2), tr)
+                tf.transpose(K.reverse(out[1][:, :, -2*p:-p, :, 0], 2), tr)
             ], axis=3), -1
         ))
 
         del out1
         outputs = K.concatenate(out, axis=-1)
         return outputs
-
-        # # Pad the equatorial upper/lower boundaries
-        # # Face 1
-        # outputs = outputs[:, :, :p, sl, 0].assign(inputs[:, :, -p:, :, 4])
-        # outputs = outputs[:, :, -p:, sl, 0].assign(inputs[:, :, :p, :, 5])
-        # # Face 2
-        # outputs = outputs[:, :, :p, sl, 1].assign(tf.transpose(inputs[:, :, ::-1, -p:, 4], tr))
-        # outputs = outputs[:, :, -p:, sl, 1].assign(tf.transpose(K.reverse(inputs[:, :, :, -p:, 5], 2), tr))
-        # # Face 3
-        # outputs = outputs[:, :, :p, sl, 2].assign(K.reverse(inputs[:, :, :p, ::-1, 4], 2))
-        # outputs = outputs[:, :, -p:, sl, 2].assign(K.reverse(inputs[:, :, -p:, ::-1, 5], 2))
-        # # Face 4
-        # outputs = outputs[:, :, :p, sl, 3].assign(tf.transpose(K.reverse(inputs[:, :, :, :p, 4], 2), tr))
-        # outputs = outputs[:, :, -p:, sl, 3].assign(tf.transpose(inputs[:, :, ::-1, :p, 5], tr))
-        #
-        # # Pad the equatorial periodic lateral boundaries, now in the outputs at columns 2
-        # # Face 1
-        # outputs = outputs[:, :, :, :p, 0].assign(outputs[:, :, :, -2*p:-p, 3])
-        # outputs = outputs[:, :, :, -p:, 0].assign(outputs[:, :, :, p:2*p, 1])
-        # # Face 2
-        # outputs = outputs[:, :, :, :p, 1].assign(outputs[:, :, :, -2*p:-p, 0])
-        # outputs = outputs[:, :, :, -p:, 1].assign(outputs[:, :, :, p:2*p, 2])
-        # # Face 3
-        # outputs = outputs[:, :, :, :p, 2].assign(outputs[:, :, :, -2*p:-p, 1])
-        # outputs = outputs[:, :, :, -p:, 2].assign(outputs[:, :, :, p:2*p, 3])
-        # # Face 4
-        # outputs = outputs[:, :, :, :p, 3].assign(outputs[:, :, :, -2*p:-p, 2])
-        # outputs = outputs[:, :, :, -p:, 3].assign(outputs[:, :, :, p:2*p, 0])
-        #
-        # # Pad the polar boundaries with new equatorial faces, again rows 2
-        # # South pole face 5
-        # outputs = outputs[:, :, -p:, :, 4].assign(outputs[:, :, p:2*p, :, 0])
-        # outputs = outputs[:, :, ::-1, -p:, 4].assign(tf.transpose(outputs[:, :, p:2*p, :, 1], tr))
-        # outputs = outputs[:, :, :p, ::-1, 4].assign(K.reverse(outputs[:, :, p:2*p, :, 2], 2))
-        # outputs = outputs[:, :, :, :p, 4].assign(K.reverse(tf.transpose(outputs[:, :, p:2*p, :, 3], tr), 2))
-        # # North pole face 6
-        # outputs = outputs[:, :, :p, :, 5].assign(outputs[:, :, -2*p:-p, :, 0])
-        # outputs = outputs[:, :, :, -p:, 5].assign(tf.transpose(K.reverse(outputs[:, :, -2*p:-p, :, 1], 2), tr))
-        # outputs = outputs[:, :, -p:, ::-1, 5].assign(K.reverse(outputs[:, :, -2*p:-p, :, 2], 2))
-        # outputs = outputs[:, :, ::-1, :p, 5].assign(tf.transpose(outputs[:, :, -2*p:-p, :, 3], tr))
-        #
-        # return outputs
 
 
 # ==================================================================================================================== #

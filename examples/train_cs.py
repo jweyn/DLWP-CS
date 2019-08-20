@@ -27,9 +27,9 @@ from keras.callbacks import History, TensorBoard
 
 # File paths and names
 root_directory = '/home/disk/wave2/jweyn/Data/DLWP'
-predictor_file = os.path.join(root_directory, 'cfs_6h_CS_1979-2010_z500_tau300-700.nc')
-model_file = os.path.join(root_directory, 'dlwp_6h_CS_tau_relu')
-log_directory = os.path.join(root_directory, 'logs', 'CS-tau-relu')
+predictor_file = os.path.join(root_directory, 'cfs_6h_CS48_1979-2010_z500_tau300-700.nc')
+model_file = os.path.join(root_directory, 'dlwp_6h_CS48_tau_relu')
+log_directory = os.path.join(root_directory, 'logs', 'CS48-tau-relu')
 
 # NN parameters. Regularization is applied to LSTM layers by default. weight_loss indicates whether to weight the
 # loss function preferentially in the mid-latitudes.
