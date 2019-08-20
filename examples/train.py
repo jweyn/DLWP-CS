@@ -27,8 +27,8 @@ from keras.callbacks import History, TensorBoard
 # File paths and names
 root_directory = '/home/disk/wave2/jweyn/Data/DLWP'
 predictor_file = os.path.join(root_directory, 'cfs_6h_1979-2010_z500-1000_tau_sfc_NH.nc')
-model_file = os.path.join(root_directory, 'dlwp_6h_tau-lstm_acc-noscale')
-log_directory = os.path.join(root_directory, 'logs', 'tau-lstm-acc-noscale')
+model_file = os.path.join(root_directory, 'dlwp_6h_tau-lstm_relu-max1')
+log_directory = os.path.join(root_directory, 'logs', 'tau-lstm-relu-max1')
 
 # NN parameters. Regularization is applied to LSTM layers by default. weight_loss indicates whether to weight the
 # loss function preferentially in the mid-latitudes.
@@ -40,7 +40,7 @@ patience = 50
 batch_size = 64
 lambda_ = 1.e-4
 weight_loss = False
-acc_loss = True
+acc_loss = False
 shuffle = True
 
 # Data parameters. Specify the input variables/levels, output variables/levels, and time steps in/out. Note that for
@@ -50,6 +50,7 @@ input_selection = {'varlev': ['HGT/500', 'THICK/300-700']}
 output_selection = {'varlev': ['HGT/500', 'THICK/300-700']}
 input_time_steps = 2
 output_time_steps = 2
+step_interval = 1
 # Option to crop the north pole. Necessary for getting an even number of latitudes for up-sampling layers.
 crop_north_pole = True
 # Add incoming solar radiation forcing
@@ -119,13 +120,15 @@ if load_memory or use_keras_fit:
     print('Loading data to memory...')
 generator = SeriesDataGenerator(dlwp, train_data, input_sel=input_selection, output_sel=output_selection,
                                 input_time_steps=input_time_steps, output_time_steps=output_time_steps,
-                                batch_size=batch_size, add_insolation=add_solar, load=load_memory, shuffle=shuffle)
+                                batch_size=batch_size, add_insolation=add_solar, load=load_memory, shuffle=shuffle,
+                                interval=step_interval)
 if use_keras_fit:
     p_train, t_train = generator.generate([])
 if validation_data is not None:
     val_generator = SeriesDataGenerator(dlwp, validation_data, input_sel=input_selection, output_sel=output_selection,
                                         input_time_steps=input_time_steps, output_time_steps=output_time_steps,
-                                        batch_size=batch_size, add_insolation=add_solar, load=load_memory)
+                                        batch_size=batch_size, add_insolation=add_solar, load=load_memory,
+                                        interval=step_interval)
     if use_keras_fit:
         val = val_generator.generate([])
 else:
@@ -150,10 +153,11 @@ layers = (
         'dilation_rate': 2,
         'padding': 'valid',
         'data_format': 'channels_first',
-        'activation': 'tanh',
+        'activation': 'linear',
         'return_sequences': True,
         'kernel_regularizer': l2(lambda_)
     }),
+    ('ReLU', (), {'max_value': 1.}),
     ('Reshape', ((4 * cs[0] * cs[1], cs[2], cs[3]),), None),
     # -------------------------------------------------------------- #
     ('PeriodicPadding2D', ((0, 2),), {
@@ -164,9 +168,10 @@ layers = (
     ('Conv2D', (32, 3), {
         'dilation_rate': 2,
         'padding': 'valid',
-        'activation': 'tanh',
+        'activation': 'linear',
         'data_format': 'channels_first'
     }),
+    ('ReLU', (), {'max_value': 1.}),
     # ('BatchNormalization', None, {'axis': 1}),
     ('MaxPooling2D', (2,), {'data_format': 'channels_first'}),
     ('PeriodicPadding2D', ((0, 1),), {'data_format': 'channels_first'}),
@@ -174,9 +179,10 @@ layers = (
     ('Conv2D', (64, 3), {
         'dilation_rate': 1,
         'padding': 'valid',
-        'activation': 'tanh',
+        'activation': 'linear',
         'data_format': 'channels_first'
     }),
+    ('ReLU', (), {'max_value': 1.}),
     # ('BatchNormalization', None, {'axis': 1}),
     ('MaxPooling2D', (2,), {'data_format': 'channels_first'}),
     ('PeriodicPadding2D', ((0, 1),), {'data_format': 'channels_first'}),
@@ -184,9 +190,10 @@ layers = (
     ('Conv2D', (128, 3), {
         'dilation_rate': 1,
         'padding': 'valid',
-        'activation': 'tanh',
+        'activation': 'linear',
         'data_format': 'channels_first'
     }),
+    ('ReLU', (), {'max_value': 1.}),
     # ('BatchNormalization', None, {'axis': 1}),
     ('UpSampling2D', (2,), {'data_format': 'channels_first'}),
     ('PeriodicPadding2D', ((0, 1),), {'data_format': 'channels_first'}),
@@ -194,9 +201,10 @@ layers = (
     ('Conv2D', (64, 3), {
         'dilation_rate': 1,
         'padding': 'valid',
-        'activation': 'tanh',
+        'activation': 'linear',
         'data_format': 'channels_first'
     }),
+    ('ReLU', (), {'max_value': 1.}),
     # ('BatchNormalization', None, {'axis': 1}),
     ('UpSampling2D', (2,), {'data_format': 'channels_first'}),
     ('PeriodicPadding2D', ((0, 2),), {'data_format': 'channels_first'}),
@@ -204,9 +212,10 @@ layers = (
     ('Conv2D', (32, 3), {
         'dilation_rate': 2,
         'padding': 'valid',
-        'activation': 'tanh',
+        'activation': 'linear',
         'data_format': 'channels_first'
     }),
+    ('ReLU', (), {'max_value': 1.}),
     # ('BatchNormalization', None, {'axis': 1}),
     ('PeriodicPadding2D', ((0, 2),), {'data_format': 'channels_first'}),
     ('ZeroPadding2D', ((2, 0),), {'data_format': 'channels_first'}),
