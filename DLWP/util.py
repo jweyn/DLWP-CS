@@ -316,13 +316,14 @@ def insolation(dates, lat, lon, S=1.):
         assert len(lat.shape) == len(lon.shape)
     except AssertionError:
         raise ValueError("'lat' and 'lon' must either both be 1d or both be 2d'")
-    if len(lat.shape) == 2:
+    if len(lat.shape) >= 2:
         try:
             assert lat.shape == lon.shape
         except AssertionError:
             raise ValueError("shape mismatch between lat (%s) and lon (%s)" % (lat.shape, lon.shape))
     if len(lat.shape) == 1:
         lon, lat = np.meshgrid(lon, lat)
+    n_dim = len(lat.shape)
 
     # Constants for year 1995 (standard)
     eps = 23.4441 * np.pi / 180.
@@ -332,21 +333,23 @@ def insolation(dates, lat, lon, S=1.):
     # Get the day of year. Ignore leap days.
     days = pd.Series(dates)
     days = days.apply(day_of_year)
+    days_arr = days.values.copy()
+    for d in range(n_dim):
+        days_arr = np.expand_dims(days_arr, -1)
     # Longitude of the earth relative to the orbit, 1st order approximation
     lambda_m0 = ecc * (1. + beta) * np.sin(om)
-    lambda_m = lambda_m0 + 2. * np.pi * (days.values - 80.5) / 365.
+    lambda_m = lambda_m0 + 2. * np.pi * (days_arr - 80.5) / 365.
     lambda_ = lambda_m + 2. * ecc * np.sin(lambda_m - om)
     # Solar declination
     dec = np.arcsin(np.sin(eps) * np.sin(lambda_))
     # Hour angle
-    h = 2 * np.pi * (days.values[:, None, None] + lon / 360.)
+    h = 2 * np.pi * (days_arr + lon / 360.)
     # Distance
     rho = (1. - ecc ** 2.) / (1. + ecc * np.cos(lambda_ - om))
 
     # Insolation
     lat *= np.pi / 180.
-    sol = S * (np.sin(lat[None, ...]) * np.sin(dec[:, None, None]) -
-               np.cos(lat[None, ...]) * np.cos(dec[:, None, None]) * np.cos(h)) * rho[:, None, None] ** -2.
+    sol = S * (np.sin(lat[None, ...]) * np.sin(dec) - np.cos(lat[None, ...]) * np.cos(dec) * np.cos(h)) * rho ** -2.
     sol[sol < 0.] = 0.
 
     return sol.astype(np.float32)

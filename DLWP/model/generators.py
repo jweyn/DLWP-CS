@@ -345,7 +345,10 @@ class SeriesDataGenerator(Sequence):
         :param input_time_steps: int: number of time steps in the input features
         :param output_time_steps: int: number of time steps in the output features (recommended either 1 or the same
             as input_time_steps)
-        :param sequence: int or None: if int, then the output targets is a list of sequence consecutive forecast steps
+        :param sequence: int or None: if int, then the output targets is a list of sequence consecutive forecast steps.
+            Note that in this mode, if add_insolation is True, the inputs are also a list of consecutive forecast steps,
+            with the first step containing all of the input data and subsequent steps containing only the requisite
+            insolation fields.
         :param interval: int: the number of steps to take when producing target data. For example, if interval is 2 and
             the spacing between time steps is 6 h, the target will be 12 hours in the future.
         :param add_insolation: bool: if True, add insolation to the inputs. Incompatible with 3-d convolutions.
@@ -418,12 +421,9 @@ class SeriesDataGenerator(Sequence):
         # Pre-generate the insolation data
         self._add_insolation = int(add_insolation)
         if add_insolation:
-            sol = insolation(self.da.sample.values, self.da.lat.values, self.da.lon.values)
-            self.insolation_da = xr.DataArray(sol, coords={
-                'sample': self.da.sample,
-                'lat': self.da.lat,
-                'lon': self.da.lon
-            }, dims=['sample', 'lat', 'lon'])
+            sol = insolation(self.da.sample.values, self.ds.lat.values, self.ds.lon.values)
+            self.insolation_da = xr.DataArray(sol, dims=['sample'] + ['x%d' % r for r in range(self.rank)])
+            self.insolation_da['sample'] = self.da.sample.values
 
     @property
     def shape(self):
@@ -527,6 +527,15 @@ class SeriesDataGenerator(Sequence):
         else:
             return self.output_convolution_shape
 
+    @property
+    def insolation_shape(self):
+        """
+        :return: the shape of insolation inputs in steps 1- of an input sequence, or None if add_insolation is False.
+            Note that it always includes the time step dimension, but no channels dimension. The network needs to
+            accomodate this.
+        """
+        return tuple((self._input_time_steps, 1) + self.convolution_shape[-self.rank:])
+
     def on_epoch_end(self):
         self._indices = np.arange(self._n_sample)
         if self._shuffle:
@@ -547,13 +556,24 @@ class SeriesDataGenerator(Sequence):
             self._add_insolation = False
             keep_time = bool(self._keep_time_axis)
             self._keep_time_axis = True
-            s = tuple(self.convolution_shape)
+            shape = tuple(self.convolution_shape)
             self._add_insolation = True
             self._keep_time_axis = bool(keep_time)
-            sol = np.concatenate([self.insolation_da.values[samples + n, np.newaxis]
-                                  for n in range(self._input_time_steps)], axis=1)
-            p = p.reshape((n_sample,) + s)
-            p = np.concatenate([p, sol[:, :, np.newaxis]], axis=2)
+            insol = []
+            if self._sequence is not None:
+                for s in range(self._sequence):
+                    insol.append(
+                        np.concatenate([self.insolation_da.values[samples + self._input_time_steps * s + n,
+                                                                  np.newaxis, np.newaxis]
+                                        for n in range(self._input_time_steps)], axis=1)
+                    )
+            else:
+                insol.append(
+                    np.concatenate([self.insolation_da.values[samples + n, np.newaxis, np.newaxis]
+                                    for n in range(self._input_time_steps)], axis=1)
+                )
+            p = p.reshape((n_sample,) + shape)
+            p = np.concatenate([p, insol[0]], axis=2)
         p = p.reshape((n_sample, -1))
 
         # Targets, including sequence if desired
@@ -583,6 +603,10 @@ class SeriesDataGenerator(Sequence):
                     t = t.reshape((n_sample,) + self.output_dense_shape)
 
                 targets.append(t)
+
+            # Sequence of inputs (plus insolation) for predictors
+            if self._add_insolation:
+                p = [p] + insol[1:]
         else:
             t = np.concatenate([self.output_da.values[samples + self._input_time_steps + n +
                                                       self._interval - 1, np.newaxis]

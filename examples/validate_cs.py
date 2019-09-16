@@ -135,6 +135,10 @@ if isinstance(validation_set, int):
 else:  # we must have a list of datetimes
     predictor_ds = all_ds.sel(sample=validation_set)
 
+# Fix negative latitude for solar radiation input
+predictor_ds.lat.load()
+predictor_ds.lat[:] = -1. * predictor_ds.lat.values
+
 # Shortcuts for latitude range
 lat_min = np.min(lat_range)
 lat_max = np.max(lat_range)
@@ -211,42 +215,52 @@ if scale_variables:
 
 for m, model in enumerate(models):
     print('Loading model %s...' % model)
-
     # Load the model
     dlwp, history = load_model('%s/%s' % (root_directory, model), True, gpus=1)
 
-    # Create data generator
-    val_generator = SeriesDataGenerator(dlwp, predictor_ds, rank=3, add_insolation=add_insolation[m],
-                                        input_sel=input_selection[m], output_sel=output_selection[m],
-                                        input_time_steps=input_time_steps[m], output_time_steps=output_time_steps[m],
-                                        batch_size=64, load=False)
-    p, _ = val_generator.generate([])
-
-    # Make a time series prediction
-    print('Predicting with model %s...' % model_labels[m])
-    time_series_array = dlwp.predict_timeseries(p, num_forecast_steps, verbose=1)
-    p, _ = None, None
-
-    # Assign coordinates
-    # Assign forecast hour coordinate
-    f_hours.append(np.arange(dt, time_series_array.shape[0] * dt + 1., dt))
-    time_series = verify.add_metadata_to_forecast_cs(time_series_array, f_hours[m],
-                                                     predictor_ds.isel(sample=slice(input_time_steps[m] - 1,
-                                                                                    -output_time_steps[m])))
-    time_series = time_series.sel(**selection)
-
-    # Save and remap
-    print('Remapping from cube sphere...')
     forecast_file = '%s/%s_forecast.nc' % (root_directory, remove_chars(model_labels[m]))
-    time_series.to_netcdf(forecast_file + '.cs')
-    time_series = None
+    if os.path.isfile(forecast_file):
+        print('Forecast file %s already exists; using it. If issues arise, delete this file and try again.'
+              % forecast_file)
 
-    csr.convert_from_faces(forecast_file + '.cs', forecast_file + '.tmp')
-    csr.inverse_remap(forecast_file + '.tmp', forecast_file, '--var', 'forecast')
-    os.remove(forecast_file + '.tmp')
+    else:
+        # Create data generator
+        sequence = dlwp._n_steps if hasattr(dlwp, '_n_steps') and dlwp._n_steps > 1 else None
+        val_generator = SeriesDataGenerator(dlwp, predictor_ds, rank=3, add_insolation=add_insolation[m],
+                                            input_sel=input_selection[m], output_sel=output_selection[m],
+                                            input_time_steps=input_time_steps[m],
+                                            output_time_steps=output_time_steps[m],
+                                            sequence=sequence, batch_size=64, load=False)
+
+        estimator = TimeSeriesEstimator(dlwp, val_generator)
+
+        # Make a time series prediction
+        print('Predicting with model %s...' % model_labels[m])
+        time_series = estimator.predict(num_forecast_steps, verbose=1)
+
+        # For some reason the DataArray produced by TimeSeriesEstimator is incompatible with ncview and the remap code.
+        # Change the coordinates using a different method.
+        fh = np.arange(dt, time_series.shape[0] * dt + 1., dt)
+        sequence = 1 if sequence is None else sequence
+        time_series = verify.add_metadata_to_forecast_cs(
+            time_series.values,
+            fh,
+            predictor_ds.isel(sample=slice(input_time_steps[m] - 1, -output_time_steps[m] * sequence))
+        )
+        time_series = time_series.sel(**selection)
+
+        # Save and remap
+        print('Remapping from cube sphere...')
+        time_series.to_netcdf(forecast_file + '.cs')
+        time_series = None
+
+        csr.convert_from_faces(forecast_file + '.cs', forecast_file + '.tmp')
+        csr.inverse_remap(forecast_file + '.tmp', forecast_file, '--var', 'forecast')
+        os.remove(forecast_file + '.tmp')
 
     time_series_ds = xr.open_dataset(forecast_file)
     time_series = time_series_ds.forecast
+    f_hours.append(time_series.f_hour.values)
 
     # Slice the arrays as we want. Remapping the cube sphere inverses the lat/lon directions.
     try:
@@ -287,10 +301,10 @@ for m, model in enumerate(models):
         zonal_mean_plot(obs_zonal_mean, obs_zonal_std, pred_zonal_mean, pred_zonal_std, dt*num_forecast_steps,
                         model_labels[m], out_directory=plot_directory)
 
-    # # Clear the model
-    # dlwp = None
+    # Clear the model
+    dlwp = None
     # time_series = None
-    # K.clear_session()
+    K.clear_session()
 
 
 #%% Add Barotropic model

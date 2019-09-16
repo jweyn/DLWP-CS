@@ -18,12 +18,10 @@ from DLWP.model import DLWPFunctional, SeriesDataGenerator
 from DLWP.util import save_model, train_test_split_ind
 from keras.callbacks import History, TensorBoard
 
-from keras.layers import Input, MaxPooling3D, UpSampling3D, AveragePooling3D, Reshape, concatenate, ReLU
-from DLWP.custom import CubeSpherePadding2D, CubeSphereConv2D, RNNResetStates, EarlyStoppingMin, slice_layer, \
-    latitude_weighted_loss
+from keras.layers import Input, MaxPooling3D, UpSampling3D, AveragePooling3D, concatenate, ReLU, Reshape, Concatenate
+from DLWP.custom import CubeSpherePadding2D, CubeSphereConv2D, RNNResetStates, EarlyStoppingMin, slice_layer
 
 from keras.regularizers import l2
-from keras.losses import mean_squared_error
 from keras.models import Model
 
 
@@ -32,19 +30,17 @@ from keras.models import Model
 # File paths and names
 root_directory = '/home/disk/wave2/jweyn/Data/DLWP'
 predictor_file = os.path.join(root_directory, 'cfs_6h_CS48_1979-2010_z500_tau300-700.nc')
-model_file = os.path.join(root_directory, 'dlwp_6h_CS48_tau_relu-unet')
-log_directory = os.path.join(root_directory, 'logs', 'CS48-tau-relu-unet')
+model_file = os.path.join(root_directory, 'dlwp_6h_CS48_tau-sol_T2_unet01-leaky-avg')
+log_directory = os.path.join(root_directory, 'logs', 'CS48-tau-sol-T2-unet01-leaky-avg')
 
 # NN parameters. Regularization is applied to LSTM layers by default. weight_loss indicates whether to weight the
 # loss function preferentially in the mid-latitudes.
 model_is_convolutional = True
-lambda_ = 1.e-4
-min_epochs = 200
-max_epochs = 1000
+min_epochs = 100
+max_epochs = 200
 patience = 50
 batch_size = 64
 lambda_ = 1.e-4
-weight_loss = False
 loss_by_step = None
 shuffle = True
 skip_connections = True
@@ -55,9 +51,9 @@ skip_connections = True
 # of forecast steps (units of model delta t) is io_time_steps * integration_steps.
 io_selection = {'varlev': ['HGT/500', 'THICK/300-700']}
 io_time_steps = 2
-integration_steps = 1
+integration_steps = 2
 # Add incoming solar radiation forcing
-add_solar = False
+add_solar = True
 
 # If system memory permits, loading the predictor data can greatly increase efficiency when training on GPUs, if the
 # train computation takes less time than the data loading.
@@ -80,6 +76,9 @@ train_set = list(pd.date_range(datetime(1979, 1, 1, 6), datetime(2002, 12, 31, 1
 #%% Open data
 
 data = xr.open_dataset(predictor_file, chunks={'sample': batch_size})
+# Fix negative latitude for solar radiation input
+data.lat.load()
+data.lat[:] = -1. * data.lat.values
 
 if 'time_step' in data.dims:
     time_dim = data.dims['time_step']
@@ -141,44 +140,71 @@ else:
 # Up-sampling convolutional network with LSTM layer
 cs = generator.convolution_shape
 cso = generator.output_convolution_shape
+input_seq = (integration_steps > 1 and add_solar)
 
-# Convolutional NN
+# Define layers. Must be defined outside of model function so we use the same weights at each integration step.
 input_0 = Input(shape=cs, name='input_0')
+if input_seq:
+    more_inputs = [Input(shape=generator.insolation_shape, name='input_%d' % d) for d in range(1, integration_steps)]
 cube_padding_1 = CubeSpherePadding2D(1, data_format='channels_first')
-max_pooling_2 = MaxPooling3D((2, 2, 1), data_format='channels_first')
+pooling_2 = AveragePooling3D((2, 2, 1), data_format='channels_first')
 up_sampling_2 = UpSampling3D((2, 2, 1), data_format='channels_first')
-relu = ReLU(max_value=1.)
+relu = ReLU(negative_slope=0.1)
 conv_2d_1 = CubeSphereConv2D(32, 3, **{
         'dilation_rate': 1,
         'padding': 'valid',
         'activation': 'linear',
-        'data_format': 'channels_first'
+        'data_format': 'channels_first',
+        # 'kernel_regularizer': l2(lambda_)
+    })
+# batch_norm_1 = BatchNormalization(axis=1)
+conv_2d_1_2 = CubeSphereConv2D(32, 3, **{
+        'dilation_rate': 1,
+        'padding': 'valid',
+        'activation': 'linear',
+        'data_format': 'channels_first',
+        # 'kernel_regularizer': l2(lambda_)
     })
 conv_2d_2 = CubeSphereConv2D(64, 3, **{
         'dilation_rate': 1,
         'padding': 'valid',
         'activation': 'linear',
-        'data_format': 'channels_first'
+        'data_format': 'channels_first',
+        # 'kernel_regularizer': l2(3. * lambda_)
     })
-conv_2d_3 = CubeSphereConv2D(128, 3, **{
+# batch_norm_2 = BatchNormalization(axis=1)
+conv_2d_3 = CubeSphereConv2D(64 if skip_connections else 128, 3, **{
         'dilation_rate': 1,
         'padding': 'valid',
         'activation': 'linear',
-        'data_format': 'channels_first'
+        'data_format': 'channels_first',
+        # 'kernel_regularizer': l2(lambda_)
     })
+# batch_norm_3 = BatchNormalization(axis=1)
 conv_2d_4 = CubeSphereConv2D(32 if skip_connections else 64, 3, **{
         'dilation_rate': 1,
         'padding': 'valid',
         'activation': 'linear',
-        'data_format': 'channels_first'
+        'data_format': 'channels_first',
+        # 'kernel_regularizer': l2(3. * lambda_)
     })
-conv_2d_5 = CubeSphereConv2D(16 if skip_connections else 32, 3, **{
+# batch_norm_4 = BatchNormalization(axis=1)
+conv_2d_5 = CubeSphereConv2D(32, 3, **{
         'dilation_rate': 1,
         'padding': 'valid',
         'activation': 'linear',
-        'data_format': 'channels_first'
+        'data_format': 'channels_first',
+        # 'kernel_regularizer': l2(10. * lambda_)
     })
-conv_2d_6 = CubeSphereConv2D(cso[0], 3, **{
+# batch_norm_5 = BatchNormalization(axis=1)
+conv_2d_5_2 = CubeSphereConv2D(32, 3, **{
+        'dilation_rate': 1,
+        'padding': 'valid',
+        'activation': 'linear',
+        'data_format': 'channels_first',
+        # 'kernel_regularizer': l2(10. * lambda_)
+    })
+conv_2d_6 = CubeSphereConv2D(cso[0], 1, **{
         'padding': 'valid',
         'activation': 'linear',
         'data_format': 'channels_first'
@@ -189,13 +215,17 @@ split_2_1 = slice_layer(0, 32, axis=1)
 split_2_2 = slice_layer(32, 64, axis=1)
 
 
+# Define the model functions.
+
 def basic_model(x):
     x = cube_padding_1(x)
     x = relu(conv_2d_1(x))
-    x = max_pooling_2(x)
+    # x = cube_padding_1(x)
+    # x = relu(conv_2d_1_2(x))
+    x = pooling_2(x)
     x = cube_padding_1(x)
     x = relu(conv_2d_2(x))
-    x = max_pooling_2(x)
+    x = pooling_2(x)
     x = cube_padding_1(x)
     x = relu(conv_2d_3(x))
     x = up_sampling_2(x)
@@ -205,6 +235,7 @@ def basic_model(x):
     x = cube_padding_1(x)
     x = relu(conv_2d_5(x))
     x = cube_padding_1(x)
+    x = relu(conv_2d_5_2(x))
     x = conv_2d_6(x)
     return x
 
@@ -212,12 +243,14 @@ def basic_model(x):
 def skip_model(x):
     x = cube_padding_1(x)
     x = relu(conv_2d_1(x))
+    # x = cube_padding_1(x)
+    # x = relu(conv_2d_1_2(x))
     x, x1 = split_1_1(x), split_1_2(x)
-    x = max_pooling_2(x)
+    x = pooling_2(x)
     x = cube_padding_1(x)
     x = relu(conv_2d_2(x))
     x, x2 = split_2_1(x), split_2_2(x)
-    x = max_pooling_2(x)
+    x = pooling_2(x)
     x = cube_padding_1(x)
     x = relu(conv_2d_3(x))
     x = up_sampling_2(x)
@@ -229,25 +262,60 @@ def skip_model(x):
     x = relu(conv_2d_5(x))
     x = concatenate([x, x1], axis=1)
     x = cube_padding_1(x)
+    x = relu(conv_2d_5_2(x))
     x = conv_2d_6(x)
     return x
 
 
-model_function = skip_model if skip_connections else basic_model
-outputs = [model_function(input_0)]
-for o in range(1, integration_steps):
-    outputs.append(model_function(outputs[o-1]))
+def unet(x):
+    x0 = cube_padding_1(x)
+    x0 = relu(conv_2d_1(x0))
+    # x0 = cube_padding_1(x0)
+    # x0 = relu(conv_2d_1_2(x0))
+    x1 = pooling_2(x0)
+    x1 = cube_padding_1(x1)
+    x1 = relu(conv_2d_2(x1))
+    x2 = pooling_2(x1)
+    x2 = cube_padding_1(x2)
+    x2 = relu(conv_2d_3(x2))
+    x2 = up_sampling_2(x2)
+    x = concatenate([x2, x1], axis=1)
+    x = cube_padding_1(x)
+    x = relu(conv_2d_4(x))
+    x = up_sampling_2(x)
+    x = concatenate([x, x0], axis=1)
+    x = cube_padding_1(x)
+    x = relu(conv_2d_5(x))
+    x = cube_padding_1(x)
+    x = relu(conv_2d_5_2(x))
+    x = conv_2d_6(x)
+    return x
 
+
+def complete_model(x_in):
+    outputs = []
+    model_function = skip_model if skip_connections else basic_model
+    is_seq = isinstance(x_in, (list, tuple))
+    outputs.append(model_function(x_in[0] if is_seq else x_in))
+    for step in range(1, integration_steps):
+        xo = outputs[step - 1]
+        if is_seq:
+            xo = Reshape(generator.shape)(xo)
+            xo = Concatenate(axis=2)([xo, x_in[step]])
+            xo = Reshape(cs)(xo)
+        outputs.append(model_function(xo))
+
+    return outputs
+
+
+# Build the model with inputs and outputs
+inputs = [input_0] + more_inputs if input_seq else input_0
+model = Model(inputs=inputs, outputs=complete_model(inputs))
+
+# No weighted loss available for cube sphere at the moment, but we can weight each integration sequence
+loss_function = 'mse'
 if loss_by_step is None:
     loss_by_step = [1./integration_steps] * integration_steps
-model = Model(inputs=input_0, outputs=outputs)
-
-# Example custom loss function: pass to loss= in build_model()
-if weight_loss:
-    loss_function = latitude_weighted_loss(mean_squared_error, generator.ds.lat.values,
-                                           generator.output_convolution_shape, axis=-2, weighting='midlatitude')
-else:
-    loss_function = 'mse'
 
 # Build the DLWP model
 dlwp.build_model(model, loss=loss_function, loss_weights=loss_by_step, optimizer='adam', metrics=['mae'], gpus=n_gpu)
@@ -261,15 +329,16 @@ start_time = time.time()
 print('Begin training...')
 # run = Run.get_context()
 history = History()
-early = EarlyStoppingMin(min_epochs=min_epochs, monitor='val_loss' if val_generator is not None else 'loss',
-                         min_delta=0., patience=patience, restore_best_weights=True, verbose=1)
+early = EarlyStoppingMin(monitor='val_loss' if val_generator is not None else 'loss', min_delta=0.,
+                         min_epochs=min_epochs, max_epochs=max_epochs, patience=patience,
+                         restore_best_weights=True, verbose=1)
 tensorboard = TensorBoard(log_dir=log_directory, batch_size=batch_size, update_freq='epoch')
 
 if use_keras_fit:
-    dlwp.fit(p_train, t_train, batch_size=batch_size, epochs=max_epochs, verbose=1, validation_data=val,
+    dlwp.fit(p_train, t_train, batch_size=batch_size, epochs=max_epochs+1, verbose=1, validation_data=val,
              callbacks=[history, RNNResetStates(), early])
 else:
-    dlwp.fit_generator(generator, epochs=max_epochs, verbose=1, validation_data=val_generator,
+    dlwp.fit_generator(generator, epochs=max_epochs+1, verbose=1, validation_data=val_generator,
                        use_multiprocessing=True, callbacks=[history, RNNResetStates(), early])
 end_time = time.time()
 

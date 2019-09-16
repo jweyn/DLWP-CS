@@ -269,6 +269,6 @@ def zonal_mean_plot(obs_mean, obs_std, pred_mean, pred_std, f_hour, model_name='
     plt.grid(True, color='lightgray', zorder=-100)
     plt.xlabel('zonal mean height')
     plt.ylabel('latitude')
-    plt.ylim([0., 90.])
+    # plt.ylim([-90., 90.])
     plt.savefig('%s/%s_zonal_climo.pdf' % (out_directory, remove_chars(model_name)), bbox_inches='tight')
     plt.show()

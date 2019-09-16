@@ -35,8 +35,8 @@ log_directory = os.path.join(root_directory, 'logs', 'CS48-tau-relu')
 # loss function preferentially in the mid-latitudes.
 model_is_convolutional = True
 model_is_recurrent = False
-min_epochs = 200
-max_epochs = 1000
+min_epochs = 100
+max_epochs = 200
 patience = 50
 batch_size = 64
 lambda_ = 1.e-4
@@ -121,10 +121,10 @@ generator = SeriesDataGenerator(dlwp, train_data, rank=3, input_sel=input_select
 if use_keras_fit:
     p_train, t_train = generator.generate([])
 if validation_data is not None:
-    val_generator = SeriesDataGenerator(dlwp, validation_data, rank=3, input_sel=input_selection, output_sel=output_selection,
-                                        input_time_steps=input_time_steps, output_time_steps=output_time_steps,
-                                        batch_size=batch_size, add_insolation=add_solar, load=load_memory,
-                                        interval=step_interval)
+    val_generator = SeriesDataGenerator(dlwp, validation_data, rank=3, input_sel=input_selection,
+                                        output_sel=output_selection, input_time_steps=input_time_steps,
+                                        output_time_steps=output_time_steps,batch_size=batch_size,
+                                        add_insolation=add_solar, load=load_memory, interval=step_interval)
     if use_keras_fit:
         val = val_generator.generate([])
 else:
@@ -225,15 +225,16 @@ print(dlwp.base_model.summary())
 start_time = time.time()
 print('Begin training...')
 history = History()
-early = EarlyStoppingMin(min_epochs=min_epochs, monitor='val_loss' if val_generator is not None else 'loss',
-                         min_delta=0., patience=patience, restore_best_weights=True, verbose=1)
+early = EarlyStoppingMin(monitor='val_loss' if val_generator is not None else 'loss', min_delta=0.,
+                         min_epochs=min_epochs, max_epochs=max_epochs, patience=patience,
+                         restore_best_weights=True, verbose=1)
 tensorboard = TensorBoard(log_dir=log_directory, batch_size=batch_size, update_freq='epoch')
 
 if use_keras_fit:
-    dlwp.fit(p_train, t_train, batch_size=batch_size, epochs=max_epochs, verbose=1, validation_data=val,
+    dlwp.fit(p_train, t_train, batch_size=batch_size, epochs=max_epochs+1, verbose=1, validation_data=val,
              shuffle=shuffle, callbacks=[history, RNNResetStates(), early])
 else:
-    dlwp.fit_generator(generator, epochs=max_epochs, verbose=1, validation_data=val_generator,
+    dlwp.fit_generator(generator, epochs=max_epochs+1, verbose=1, validation_data=val_generator,
                        use_multiprocessing=True, callbacks=[history, RNNResetStates(), early])
 end_time = time.time()
 
