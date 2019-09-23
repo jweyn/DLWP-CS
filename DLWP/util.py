@@ -348,8 +348,8 @@ def insolation(dates, lat, lon, S=1.):
     rho = (1. - ecc ** 2.) / (1. + ecc * np.cos(lambda_ - om))
 
     # Insolation
-    lat *= np.pi / 180.
-    sol = S * (np.sin(lat[None, ...]) * np.sin(dec) - np.cos(lat[None, ...]) * np.cos(dec) * np.cos(h)) * rho ** -2.
+    sol = S * (np.sin(np.pi / 180. * lat[None, ...]) * np.sin(dec) -
+               np.cos(np.pi / 180. * lat[None, ...]) * np.cos(dec) * np.cos(h)) * rho ** -2.
     sol[sol < 0.] = 0.
 
     return sol.astype(np.float32)

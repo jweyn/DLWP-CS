@@ -29,9 +29,9 @@ from keras.models import Model
 
 # File paths and names
 root_directory = '/home/disk/wave2/jweyn/Data/DLWP'
-predictor_file = os.path.join(root_directory, 'cfs_6h_CS48_1979-2010_z500_tau300-700.nc')
-model_file = os.path.join(root_directory, 'dlwp_6h_CS48_tau-sol_T2_unet01-leaky-avg')
-log_directory = os.path.join(root_directory, 'logs', 'CS48-tau-sol-T2-unet01-leaky-avg')
+predictor_file = os.path.join(root_directory, 'cfs_6h_CS48_1979-2010_z3-5-7-10_tau_sfc.nc')
+model_file = os.path.join(root_directory, 'dlwp_6h_CS48_surf1000_T2_unet01')
+log_directory = os.path.join(root_directory, 'logs', 'CS48-surf1000-T2-unet01')
 
 # NN parameters. Regularization is applied to LSTM layers by default. weight_loss indicates whether to weight the
 # loss function preferentially in the mid-latitudes.
@@ -49,7 +49,7 @@ skip_connections = True
 # the inputs and outputs match exactly (for now). Ensure that the selections use LISTS of values (even for only 1) to
 # keep dimensions correct. The number of output iterations to train on is given by integration_steps. The actual number
 # of forecast steps (units of model delta t) is io_time_steps * integration_steps.
-io_selection = {'varlev': ['HGT/500', 'THICK/300-700']}
+io_selection = {'varlev': ['HGT/500', 'THICK/300-700', 'HGT/1000', 'TMP2/0']}
 io_time_steps = 2
 integration_steps = 2
 # Add incoming solar radiation forcing
@@ -57,7 +57,7 @@ add_solar = True
 
 # If system memory permits, loading the predictor data can greatly increase efficiency when training on GPUs, if the
 # train computation takes less time than the data loading.
-load_memory = True
+load_memory = 'minimal'
 
 # Use multiple GPUs, if available
 n_gpu = 1
@@ -114,7 +114,7 @@ else:  # we must have a list of datetimes
     train_data = data.sel(sample=train_set)
 
 # Build the data generators
-if load_memory or use_keras_fit:
+if not(not load_memory) or use_keras_fit:
     print('Loading data to memory...')
 generator = SeriesDataGenerator(dlwp, train_data, rank=3, input_sel=io_selection, output_sel=io_selection,
                                 input_time_steps=io_time_steps, output_time_steps=io_time_steps,

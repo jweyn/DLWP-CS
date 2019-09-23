@@ -361,7 +361,9 @@ class SeriesDataGenerator(Sequence):
             'required': load only the required variables, but this also loads two separate datasets for predictors and
                 targets
             'minimal': load only one copy of the data, but also loads all of the variables. This may use half as much
-                memory as 'required', but only if there are no unused extra variables in the file.
+                memory as 'required', but only if there are no unused extra variables in the file. Note that in order
+                to attempt to use numpy views to save memory, the order of variables may be different from the
+                input and output selections.
         """
         self.model = model
         if not hasattr(ds, 'predictors'):
@@ -381,7 +383,7 @@ class SeriesDataGenerator(Sequence):
                     raise ValueError("'load' must be one of 'full', 'required', or 'minimal'")
         self.ds = ds
         if load == 'full':
-            ds.load()
+            self.ds.load()
         self._batch_size = batch_size
         self._shuffle = shuffle
         self._remove_nan = remove_nan
@@ -409,12 +411,31 @@ class SeriesDataGenerator(Sequence):
         self._interval = interval
 
         if load == 'minimal':
-            self.da.load()
-        self.input_da = self.da.sel(**self._input_sel)
-        self.output_da = self.da.sel(**self._output_sel)
-        if load == 'required':
-            self.input_da.load()
-            self.output_da.load()
+            # Try to transpose the axes so we can use basic indexing to return views
+            if 'varlev' in input_sel.keys():
+                union = [s for s in self._input_sel['varlev'] if s in self._output_sel['varlev']]
+                added_in = [s for s in self._input_sel['varlev'] if s not in union]
+                added_out = [s for s in self._output_sel['varlev'] if s not in union]
+                if len(added_in) > 0 and len(added_out) > 0:
+                    warnings.warn("Found extra variables in both input and output, could not reduce to basic "
+                                  "indexing. 'minimal' indexing will use much more memory than 'required'.")
+                    self.da.load()
+                    self.input_da = self.da.sel(**self._input_sel)
+                    self.output_da = self.da.sel(**self._output_sel)
+                else:
+                    self.da = self.da.sel(varlev=union + added_in + added_out)
+                    self.da.load()
+                    self.input_da = self.da.isel(varlev=slice(0, len(union) + len(added_in)))
+                    self.output_da = self.da.isel(varlev=slice(0, len(union) + len(added_out)))
+            else:
+                raise NotImplementedError("Check for 'minimal' data loading not implemented yet for input files with "
+                                          "variable/level axes. Use 'required' to avoid excessive memory use.")
+        else:
+            self.input_da = self.da.sel(**self._input_sel)
+            self.output_da = self.da.sel(**self._output_sel)
+            if load == 'required':
+                self.input_da.load()
+                self.output_da.load()
 
         self.on_epoch_end()
 

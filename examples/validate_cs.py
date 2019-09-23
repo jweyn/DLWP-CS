@@ -33,25 +33,36 @@ from DLWP.remap import CubeSphereRemap
 # with the conversion to the face coordinate. The scale file contains 'mean' and 'std' variables to perform inverse
 # scaling back to real data units.
 root_directory = '/home/disk/wave2/jweyn/Data/DLWP'
-predictor_file = '%s/cfs_6h_CS48_1979-2010_z500_tau300-700.nc' % root_directory
-scale_file = '%s/cfs_6h_1979-2010_z500_tau300-700.nc' % root_directory
+predictor_file = '%s/cfs_6h_CS48_1979-2010_z3-5-7-10_tau_sfc.nc' % root_directory
+scale_file = '%s/cfs_6h_1979-2010_z3-5-7-10_tau_sfc.nc' % root_directory
 
 # The remap file contains the verification data passed through the same remapping scheme as the predictors. That is,
 # it contains the predictors, mapped to the cubed sphere, then remapped back with the inverse transform. If this file
 # does not exist, then it will be created from the predictor file, which, notably, uses a lot of memory and is quite
 # slow.
-remapped_file = '%s/cfs_6h_LL48_1979-2010_z500_tau300-700.nc' % root_directory
+remapped_file = '%s/cfs_6h_LL48_1979-2010_z3-5-7-10_tau_sfc.nc' % root_directory
 reverse_lat = False
 
 # Map files for cubed sphere remapping
-map_files = ('map_LL73x144_CS48.nc', 'map_CS48_LL73x144.nc')
+map_files = ('/home/disk/brume/jweyn/Documents/DLWP/map_LL73x144_CS48.nc',
+             '/home/disk/brume/jweyn/Documents/DLWP/map_CS48_LL73x144.nc')
 
 # Names of model files, located in the root_directory, and labels for those models
 models = [
-    'dlwp_6h_CS48_tau_relu-unet',
+    'dlwp_6h_CS48_tau_unet0-leaky-avg',
+    'dlwp_6h_CS48_tau-sol_unet02-leaky-avg',
+    'dlwp_6h_CS48_tau_T2_unet01-leaky-avg',
+    'dlwp_6h_CS48_tau-sol_T2_unet01-leaky-avg',
+    'dlwp_6h_CS48_surfboard_unet01',
+    'dlwp_6h_CS48_surfboard_T2_unet01'
 ]
 model_labels = [
-    r'$\tau$ CS 48 U-net',
+    r'$\tau$ CS 48 U-Net leaky avg',
+    r'$\tau$-SOL CS 48 U-Net v2 leaky avg',
+    r'$\tau$ CS 48 U-Net v1 T2 leaky avg',
+    r'$\tau$-SOL CS 48 U-Net v1 T2 leaky avg',
+    r'$\tau$-SOL-surf CS 48 U-Net v1 leaky avg',
+    r'$\tau$-SOL-surf CS 48 U-Net v1 T2 leaky avg'
 ]
 
 # Optional list of selections to make from the predictor dataset for each model. This is useful if, for example,
@@ -60,13 +71,23 @@ model_labels = [
 # and outputs. Also specify the number of input/output time steps in each model.
 input_selection = [
     {'varlev': ['HGT/500', 'THICK/300-700']},
+    {'varlev': ['HGT/500', 'THICK/300-700']},
+    {'varlev': ['HGT/500', 'THICK/300-700']},
+    {'varlev': ['HGT/500', 'THICK/300-700']},
+    {'varlev': ['HGT/500', 'THICK/300-700', 'PRMSL/0', 'TMP2/0']},
+    {'varlev': ['HGT/500', 'THICK/300-700', 'PRMSL/0', 'TMP2/0']},
 ]
 output_selection = [
     {'varlev': ['HGT/500', 'THICK/300-700']},
+    {'varlev': ['HGT/500', 'THICK/300-700']},
+    {'varlev': ['HGT/500', 'THICK/300-700']},
+    {'varlev': ['HGT/500', 'THICK/300-700']},
+    {'varlev': ['HGT/500', 'THICK/300-700', 'PRMSL/0', 'TMP2/0']},
+    {'varlev': ['HGT/500', 'THICK/300-700', 'PRMSL/0', 'TMP2/0']},
 ]
-add_insolation = [False] * len(models)
-input_time_steps = [2, ] * len(models)
-output_time_steps = [2, ] * len(models)
+add_insolation = [False, True, False, True, True, True]
+input_time_steps = [2] * len(models)
+output_time_steps = [2] * len(models)
 
 # Validation set to use. Either an integer (number of validation samples, taken from the end), or an iterable of
 # pandas datetime objects.
@@ -94,7 +115,7 @@ num_forecast_hours = 336
 dt = 6
 
 # Latitude bounds for MSE calculation
-lat_range = [-70., -20.]
+lat_range = [-90., 90.]
 
 # Calculate statistics for a selected variable and level, or varlev if the predictor data was produced pairwise.
 # Provide as a dictionary to extract to kwargs. If  None, then averages all variables. Cannot be None if using a
@@ -107,18 +128,18 @@ selection = {
 scale_variables = True
 
 # Do specific plots
-plot_directory = './Plots'
+plot_directory = '/home/disk/brume/jweyn/Documents/DLWP/Plots'
 plot_example = None  # None to disable or the date index of the sample
 plot_example_f_hour = 24  # Forecast hour index of the sample
 plot_history = False
-plot_zonal = False
+plot_zonal = True
 plot_mse = True
 plot_spread = False
 plot_mean = False
 method = 'rmse'
-mse_title = r'$Z_{500}$; 2003; 20-70$^{\circ}$N'
-mse_file_name = 'rmse_tau-CS48-unet.pdf'
-mse_pkl_file = 'rmse_tau-CS48-unet.pkl'
+mse_title = r'$Z_{500}$; 2003; global'  # '20-70$^{\circ}$N'
+mse_file_name = 'rmse_tau-CS48-unet-sfc.pdf'
+mse_pkl_file = 'rmse_tau-CS48-unet-sfc.pkl'
 
 
 #%% Pre-processing
@@ -245,7 +266,8 @@ for m, model in enumerate(models):
         time_series = verify.add_metadata_to_forecast_cs(
             time_series.values,
             fh,
-            predictor_ds.isel(sample=slice(input_time_steps[m] - 1, -output_time_steps[m] * sequence))
+            predictor_ds.sel(**output_selection[m]).isel(sample=slice(input_time_steps[m] - 1,
+                                                                      -output_time_steps[m] * sequence))
         )
         time_series = time_series.sel(**selection)
 
