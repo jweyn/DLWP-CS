@@ -13,7 +13,7 @@ import warnings
 import numpy as np
 import xarray as xr
 from keras.utils import Sequence
-from ..util import delete_nan_samples, insolation
+from ..util import delete_nan_samples, insolation, to_bool
 
 
 class DataGenerator(Sequence):
@@ -333,7 +333,7 @@ class SeriesDataGenerator(Sequence):
 
     def __init__(self, model, ds, rank=2, input_sel=None, output_sel=None, input_time_steps=1, output_time_steps=1,
                  sequence=None, interval=1, add_insolation=False, batch_size=32, shuffle=False, remove_nan=True,
-                 load='required'):
+                 load='required', force_load=False):
         """
         Initialize a SeriesDataGenerator.
 
@@ -351,7 +351,11 @@ class SeriesDataGenerator(Sequence):
             insolation fields.
         :param interval: int: the number of steps to take when producing target data. For example, if interval is 2 and
             the spacing between time steps is 6 h, the target will be 12 hours in the future.
-        :param add_insolation: bool: if True, add insolation to the inputs. Incompatible with 3-d convolutions.
+        :param add_insolation: bool or str:
+            if False: do not add incoming solar radiation
+            if True: add insolation to the inputs. Incompatible with 3-d convolutions.
+            if 'hourly': same as True
+            if 'daily': add the daily max insolation without diurnal cycle
         :param batch_size: int: number of samples to take at a time from the dataset
         :param shuffle: bool: if True, randomly select batches
         :param remove_nan: bool: if True, remove any samples with NaNs
@@ -364,6 +368,7 @@ class SeriesDataGenerator(Sequence):
                 memory as 'required', but only if there are no unused extra variables in the file. Note that in order
                 to attempt to use numpy views to save memory, the order of variables may be different from the
                 input and output selections.
+        :param force_load: if True, load the data upon initialization of instance
         """
         self.model = model
         if not hasattr(ds, 'predictors'):
@@ -381,9 +386,19 @@ class SeriesDataGenerator(Sequence):
                     load = 'required'
                 else:
                     raise ValueError("'load' must be one of 'full', 'required', or 'minimal'")
+        try:
+            add_insolation = to_bool(add_insolation)
+        except ValueError:
+            pass
+        assert isinstance(add_insolation, (bool, str))
+        if isinstance(add_insolation, str):
+            assert add_insolation in ['hourly', 'daily']
+        self._add_insolation = 1 if isinstance(add_insolation, str) else int(add_insolation)
+        self._daily_insolation = str(add_insolation) == 'daily'
+        self._load = load
+        self._is_loaded = False
+
         self.ds = ds
-        if load == 'full':
-            self.ds.load()
         self._batch_size = batch_size
         self._shuffle = shuffle
         self._remove_nan = remove_nan
@@ -405,14 +420,42 @@ class SeriesDataGenerator(Sequence):
 
         self.rank = rank
         self._input_sel = input_sel or {}
+        if len(self._input_sel) == 0:
+            if 'varlev' in self.ds.variables.keys():
+                self._input_sel = {'varlev': self.ds['varlev'].values}
+            else:
+                self._input_sel = {'variable': self.ds['variable'].values, 'level': self.ds['level'].values}
         self._output_sel = output_sel or {}
+        if len(self._output_sel) == 0:
+            if 'varlev' in self.ds.variables.keys():
+                self._output_sel = {'varlev': self.ds['varlev'].values}
+            else:
+                self._output_sel = {'variable': self.ds['variable'].values, 'level': self.ds['level'].values}
         self._input_time_steps = input_time_steps
         self._output_time_steps = output_time_steps
         self._interval = interval
 
-        if load == 'minimal':
+        # Temporarily set DataArrays for coordinates
+        self.input_da = self.da.sel(**self._input_sel)
+        self.output_da = self.da.sel(**self._output_sel)
+        if force_load:
+            self._load_data()
+
+        self.on_epoch_end()
+
+        # Pre-generate the insolation data
+        if self._add_insolation:
+            sol = insolation(self.da.sample.values, self.ds.lat.values, self.ds.lon.values,
+                             daily=self._daily_insolation)
+            self.insolation_da = xr.DataArray(sol, dims=['sample'] + ['x%d' % r for r in range(self.rank)])
+            self.insolation_da['sample'] = self.da.sample.values
+
+    def _load_data(self):
+        if self._load == 'full':
+            self.ds.load()
+        if self._load == 'minimal':
             # Try to transpose the axes so we can use basic indexing to return views
-            if 'varlev' in input_sel.keys():
+            if 'varlev' in self._input_sel.keys():
                 union = [s for s in self._input_sel['varlev'] if s in self._output_sel['varlev']]
                 added_in = [s for s in self._input_sel['varlev'] if s not in union]
                 added_out = [s for s in self._output_sel['varlev'] if s not in union]
@@ -433,18 +476,10 @@ class SeriesDataGenerator(Sequence):
         else:
             self.input_da = self.da.sel(**self._input_sel)
             self.output_da = self.da.sel(**self._output_sel)
-            if load == 'required':
+            if self._load == 'required':
                 self.input_da.load()
                 self.output_da.load()
-
-        self.on_epoch_end()
-
-        # Pre-generate the insolation data
-        self._add_insolation = int(add_insolation)
-        if add_insolation:
-            sol = insolation(self.da.sample.values, self.ds.lat.values, self.ds.lon.values)
-            self.insolation_da = xr.DataArray(sol, dims=['sample'] + ['x%d' % r for r in range(self.rank)])
-            self.insolation_da['sample'] = self.da.sample.values
+        self._is_loaded = True
 
     @property
     def shape(self):
@@ -568,6 +603,10 @@ class SeriesDataGenerator(Sequence):
         else:
             samples = np.array(samples, dtype=np.int)
         n_sample = len(samples)
+
+        if not self._is_loaded:
+            print('SeriesDataGenerator: loading data to memory')
+            self._load_data()
 
         # Predictors
         p = np.concatenate([self.input_da.values[samples + n, np.newaxis] for n in range(self._input_time_steps)],

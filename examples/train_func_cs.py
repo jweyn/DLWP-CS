@@ -49,7 +49,7 @@ skip_connections = True
 # the inputs and outputs match exactly (for now). Ensure that the selections use LISTS of values (even for only 1) to
 # keep dimensions correct. The number of output iterations to train on is given by integration_steps. The actual number
 # of forecast steps (units of model delta t) is io_time_steps * integration_steps.
-io_selection = {'varlev': ['HGT/500', 'THICK/300-700', 'HGT/1000', 'TMP2/0']}
+io_selection = {}
 io_time_steps = 2
 integration_steps = 2
 # Add incoming solar radiation forcing
@@ -75,7 +75,7 @@ train_set = list(pd.date_range(datetime(1979, 1, 1, 6), datetime(2002, 12, 31, 1
 
 #%% Open data
 
-data = xr.open_dataset(predictor_file, chunks={'sample': batch_size})
+data = xr.open_dataset(predictor_file, chunks={'sample': 1})
 # Fix negative latitude for solar radiation input
 data.lat.load()
 data.lat[:] = -1. * data.lat.values
@@ -114,8 +114,6 @@ else:  # we must have a list of datetimes
     train_data = data.sel(sample=train_set)
 
 # Build the data generators
-if not(not load_memory) or use_keras_fit:
-    print('Loading data to memory...')
 generator = SeriesDataGenerator(dlwp, train_data, rank=3, input_sel=io_selection, output_sel=io_selection,
                                 input_time_steps=io_time_steps, output_time_steps=io_time_steps,
                                 sequence=integration_steps, add_insolation=add_solar,
@@ -123,10 +121,11 @@ generator = SeriesDataGenerator(dlwp, train_data, rank=3, input_sel=io_selection
 if use_keras_fit:
     p_train, t_train = generator.generate([])
 if validation_data is not None:
+    print('Loading validation data to memory...')
     val_generator = SeriesDataGenerator(dlwp, validation_data, input_sel=io_selection, output_sel=io_selection,
                                         rank=3, input_time_steps=io_time_steps, output_time_steps=io_time_steps,
                                         sequence=integration_steps, add_insolation=add_solar,
-                                        batch_size=batch_size, load=load_memory)
+                                        batch_size=batch_size, load='minimal', force_load=True)
     if use_keras_fit:
         val = val_generator.generate([])
 else:
@@ -140,7 +139,7 @@ else:
 # Up-sampling convolutional network with LSTM layer
 cs = generator.convolution_shape
 cso = generator.output_convolution_shape
-input_seq = (integration_steps > 1 and add_solar)
+input_seq = (integration_steps > 1 and (isinstance(add_solar, str) or add_solar))
 
 # Define layers. Must be defined outside of model function so we use the same weights at each integration step.
 input_0 = Input(shape=cs, name='input_0')
@@ -294,7 +293,7 @@ def unet(x):
 
 def complete_model(x_in):
     outputs = []
-    model_function = skip_model if skip_connections else basic_model
+    model_function = unet if skip_connections else basic_model
     is_seq = isinstance(x_in, (list, tuple))
     outputs.append(model_function(x_in[0] if is_seq else x_in))
     for step in range(1, integration_steps):

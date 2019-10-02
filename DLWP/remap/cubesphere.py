@@ -40,16 +40,18 @@ class CubeSphereRemap(_BaseRemap):
     Implement tools for remapping to and from a cubed sphere using TempestRemap executables.
     """
 
-    def __init__(self, path_to_remapper=None):
+    def __init__(self, path_to_remapper=None, to_netcdf4=True):
         """
         Initialize a CubeSphereRemap object.
 
         :param path_to_remapper: str: path to the TempestRemap executables
+        :param to_netcdf4: bool: if True, also use 'ncks' command to convert remapped files to netCDF4
         """
         super(CubeSphereRemap, self).__init__(path_to_remapper=path_to_remapper)
         self.remapper = os.path.join(self.path_to_remapper, 'ApplyOfflineMap')
         self.map = None
         self.inverse_map = None
+        self.to_netcdf4 = to_netcdf4
         self._lat = None
         self._lon = None
         self._res = None
@@ -119,9 +121,12 @@ class CubeSphereRemap(_BaseRemap):
             print(e.output)
             raise
         try:
-            subprocess.check_output([os.path.join(self.path_to_remapper, 'GenerateOfflineMap'),
-                                     '--in_mesh', 'outLL.g', '--out_mesh', 'outCS.g', '--ov_mesh', 'ov_LL_CS.g',
-                                     '--in_np', '1', '--in_type', 'FV', '--out_type', 'FV', '--out_map', self.map])
+            cmd = [os.path.join(self.path_to_remapper, 'GenerateOfflineMap'),
+                   '--in_mesh', 'outLL.g', '--out_mesh', 'outCS.g', '--ov_mesh', 'ov_LL_CS.g',
+                   '--in_np', '1', '--in_type', 'FV', '--out_type', 'FV', '--out_map', self.map]
+            if self.to_netcdf4:
+                cmd = cmd + ['--out_format', 'netcdf4']
+            subprocess.check_output(cmd)
         except subprocess.CalledProcessError as e:
             print('An error occurred while generating the offline map.')
             print(e.output)
@@ -137,10 +142,12 @@ class CubeSphereRemap(_BaseRemap):
             print(e.output)
             raise
         try:
-            subprocess.check_output([os.path.join(self.path_to_remapper, 'GenerateOfflineMap'),
-                                     '--in_mesh', 'outCS.g', '--out_mesh', 'outLL.g', '--ov_mesh', 'ov_CS_LL.g',
-                                     '--in_np', '1', '--in_type', 'FV', '--out_type', 'FV', '--out_map',
-                                     self.inverse_map])
+            cmd = [os.path.join(self.path_to_remapper, 'GenerateOfflineMap'),
+                   '--in_mesh', 'outCS.g', '--out_mesh', 'outLL.g', '--ov_mesh', 'ov_CS_LL.g',
+                   '--in_np', '1', '--in_type', 'FV', '--out_type', 'FV', '--out_map', self.inverse_map]
+            if self.to_netcdf4:
+                cmd = cmd + ['--out_format', 'netcdf4']
+            subprocess.check_output(cmd)
         except subprocess.CalledProcessError as e:
             print('An error occurred while generating the offline map.')
             print(e.output)
