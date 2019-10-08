@@ -333,7 +333,7 @@ class SeriesDataGenerator(Sequence):
 
     def __init__(self, model, ds, rank=2, input_sel=None, output_sel=None, input_time_steps=1, output_time_steps=1,
                  sequence=None, interval=1, add_insolation=False, batch_size=32, shuffle=False, remove_nan=True,
-                 load='required', force_load=False):
+                 load='required', delay_load=False, constants=None):
         """
         Initialize a SeriesDataGenerator.
 
@@ -368,7 +368,9 @@ class SeriesDataGenerator(Sequence):
                 memory as 'required', but only if there are no unused extra variables in the file. Note that in order
                 to attempt to use numpy views to save memory, the order of variables may be different from the
                 input and output selections.
-        :param force_load: if True, load the data upon initialization of instance
+        :param delay_load: if True, delay the loading of the data until the first call to generate()
+        :param constants: ndarray: additional constant fields to add to each input. Must match the spatial dimensions
+            (last `rank` dimensions) of the input data.
         """
         self.model = model
         if not hasattr(ds, 'predictors'):
@@ -438,7 +440,7 @@ class SeriesDataGenerator(Sequence):
         # Temporarily set DataArrays for coordinates
         self.input_da = self.da.sel(**self._input_sel)
         self.output_da = self.da.sel(**self._output_sel)
-        if force_load:
+        if not delay_load:
             self._load_data()
 
         self.on_epoch_end()
@@ -450,7 +452,18 @@ class SeriesDataGenerator(Sequence):
             self.insolation_da = xr.DataArray(sol, dims=['sample'] + ['x%d' % r for r in range(self.rank)])
             self.insolation_da['sample'] = self.da.sample.values
 
+        # Add extra constants
+        self.constants = constants
+        if self.constants is not None:
+            try:
+                assert self.constants.shape[-self.rank:] == self.shape[-self.rank:]
+            except AssertionError:
+                raise ValueError('spatial dimensions of constants must be the same as input data; got %s and %s' %
+                                 (self.constants.shape[-self.rank:], self.shape[-self.rank:]))
+
     def _load_data(self):
+        if not(not self._load):
+            print('SeriesDataGenerator: loading data to memory')
         if self._load == 'full':
             self.ds.load()
         if self._load == 'minimal':
@@ -605,7 +618,6 @@ class SeriesDataGenerator(Sequence):
         n_sample = len(samples)
 
         if not self._is_loaded:
-            print('SeriesDataGenerator: loading data to memory')
             self._load_data()
 
         # Predictors
@@ -691,6 +703,13 @@ class SeriesDataGenerator(Sequence):
                 t = t.reshape((n_sample,) + self.output_dense_shape)
 
             targets = t
+
+        # Add constants
+        if self.constants is not None:
+            if isinstance(p, list):
+                p = p + [self.constants]
+            else:
+                p = [p, self.constants]
 
         return p, targets
 

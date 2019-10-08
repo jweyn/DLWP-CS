@@ -189,7 +189,7 @@ cs = generator.convolution_shape
 cso = generator.output_convolution_shape
 
 # Convolutional NN
-input_0 = Input(shape=cs, name='input_0')
+input_0 = Input(shape=cs, name='main_input')
 periodic_padding_2 = PeriodicPadding2D(padding=(0, 2), data_format='channels_first')
 zero_padding_2 = ZeroPadding2D(padding=(2, 0), data_format='channels_first')
 periodic_padding_1 = PeriodicPadding2D(padding=(0, 1), data_format='channels_first')

@@ -13,13 +13,13 @@ from DLWP.model.preprocessing import mean_by_batch, std_by_batch
 
 
 root_directory = '/home/disk/wave2/jweyn/Data'
-predictor_file = '%s/DLWP/cfs_6h_1979-2010_z500-1000_tau300-700_sfc_NH.nc' % root_directory
-new_file = '%s/DLWP/cfs_6h_1979-2010_z500-1000_tau_sfc_NH.nc' % root_directory
+predictor_file = '%s/DLWP/era5_2deg_3h_1979-2018_zt-t2_300-500-700-1000.nc' % root_directory
+new_file = '%s/DLWP/era5_2deg_3h_1979-2018_zt-t2-tau_300-500-700-1000.nc' % root_directory
 
-upper_sel = {'varlev': ['HGT/500']}
-lower_sel = {'varlev': ['HGT/1000']}
+upper_sel = {'varlev': ['z/300']}
+lower_sel = {'varlev': ['z/700']}
 keep_sel = {}
-new_var_coord = 'THICK/500-1000'
+new_var_coord = 'tau/300-700'
 
 
 ds = xr.open_dataset(predictor_file)

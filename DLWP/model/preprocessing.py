@@ -61,7 +61,7 @@ class Preprocessor(object):
         return (int(np.prod(self.data.predictors.shape[1:-2])),) + self.data.predictors.shape[-2:]
 
     def data_to_samples(self, time_step=1, batch_samples=100, variables='all', levels='all',
-                        pairwise=False, scale_variables=False, chunk_size=64, in_memory=False, to_zarr=False,
+                        pairwise=False, scale_variables=False, chunk_size=1, in_memory=False, to_zarr=False,
                         overwrite=False, verbose=False):
         """
         Convert the data referenced by the data_obj in __init__ to samples ready for ingestion in a DLWP model. Write
@@ -440,7 +440,7 @@ class Preprocessor(object):
         self.data = result_ds
 
     def data_to_series(self, batch_samples=100, variables='all', levels='all', pairwise=False, scale_variables=False,
-                       chunk_size=64, in_memory=False, to_zarr=False, overwrite=False, verbose=False):
+                       chunk_size=1, in_memory=False, to_zarr=False, overwrite=False, verbose=False):
         """
         Convert the data referenced by the data_obj in __init__ to a continuous time series of formatted data. This
         series of data is appropriate for use in a SeriesDataGenerator object during model training. Write data
@@ -515,8 +515,10 @@ class Preprocessor(object):
         for v in vars_available:
             if v not in variables:
                 ds = ds.drop(v)
+        lat_dim = 'lat' if 'lat' in ds.dims.keys() else 'latitude'
+        lon_dim = 'lon' if 'lon' in ds.dims.keys() else 'longitude'
         n_sample, n_var, n_level, n_lat, n_lon = (len(all_dates), len(variables), len(levels),
-                                                  ds.dims['lat'], ds.dims['lon'])
+                                                  ds.dims[lat_dim], ds.dims[lon_dim])
         if n_sample < 1:
             raise ValueError('too many time steps for time dimension')
 
@@ -552,14 +554,14 @@ class Preprocessor(object):
                 'long_name': 'Latitude',
                 'units': 'degrees_north'
             })
-            nc_fid.variables['lat'][:] = ds['lat'].values
+            nc_fid.variables['lat'][:] = ds[lat_dim].values
 
             nc_var = nc_fid.createVariable('lon', np.float32, 'lon')
             nc_var.setncatts({
                 'long_name': 'Longitude',
                 'units': 'degrees_east'
             })
-            nc_fid.variables['lon'][:] = ds['lon'].values
+            nc_fid.variables['lon'][:] = ds[lon_dim].values
 
             if pairwise:
                 nc_var = nc_fid.createVariable('varlev', str, 'varlev')

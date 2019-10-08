@@ -59,8 +59,8 @@ reforecast_end_date = datetime(2009, 12, 31, 18)
 # netCDF fill value
 fill_value = np.array(nc.default_fillvals['f4']).astype(np.float32)
 
-# Dictionary mapping request variables to netCDF variable naming conventions
-variable_names = {
+# Dictionaries mapping request variables to netCDF variable naming conventions. Not all-inclusive for now.
+pressure_variable_names = {
     'divergence': 'd',
     'fraction_of_cloud_cover': 'cc',
     'geopotential': 'z',
@@ -77,6 +77,22 @@ variable_names = {
     'v_component_of_wind': 'v',
     'vertical_velocity': 'w',
     'vorticity': 'vo'
+}
+surface_variable_names = {
+    '10m_u_component_of_wind': 'u10',
+    '10m_v_component_of_wind': 'v10',
+    '2m_dewpoint_temperature': 'd2m',
+    '2m_temperature': 't2m',
+    'land_sea_mask': 'lsm',
+    'mean_sea_level_pressure': 'msl',
+    'orography': 'z',
+    'sea_surface_temperature': 'sst',
+    'surface_latent_heat_flux': 'slhf',
+    'surface_sensible_heat_flux': 'sshf',
+    'surface_pressure': 'sp',
+    'total_column_water': 'tcw',
+    'total_column_water_vapour': 'tcwv',
+    'total_precipitation': 'tp',
 }
 
 
@@ -160,12 +176,16 @@ class ERA5Reanalysis(object):
         """
         for v in variables:
             try:
-                assert str(v) in list(variable_names.keys())
+                assert str(v) in list(pressure_variable_names.keys())
             except TypeError:
                 raise TypeError('variables must be convertible to string types')
             except AssertionError:
-                raise ValueError('variables must be within the available levels for the dataset (%s)' %
-                                 list(variable_names.keys()))
+                try:
+                    assert str(v) in list(surface_variable_names.keys())
+                except AssertionError:
+                    raise ValueError('variables must be either in the available pressure-level variables for the '
+                                     'dataset (%s) or the single-level variables (%s)' %
+                                     (list(pressure_variable_names.keys()), list(surface_variable_names.keys())))
         self.dataset_variables = sorted(list(variables))
 
     def set_levels(self, levels):
@@ -203,11 +223,15 @@ class ERA5Reanalysis(object):
 
     def _set_file_names(self):
         # Sets a list of file names.
+        self.raw_files = []
         for variable in self.dataset_variables:
-            for level in self.dataset_levels:
-                self.raw_files.append('%s/%s%s_%s.nc' % (self._root_directory, self._file_id, variable, level))
+            if variable in pressure_variable_names.keys():
+                for level in self.dataset_levels:
+                    self.raw_files.append('%s/%s_%s_%s.nc' % (self._root_directory, self._file_id, variable, level))
+            else:
+                self.raw_files.append('%s/%s_%s.nc' % (self._root_directory, self._file_id, variable))
 
-    def retrieve(self, variables, levels, years='all', months='all', days='all', hourly=3, n_proc=4, verbose=False,
+    def retrieve(self, variables, levels=(), years='all', months='all', days='all', hourly=3, n_proc=4, verbose=False,
                  request_kwargs=None, delete_temporary=False):
         """
         Retrieve netCDF files of ERA5 reanalysis data. Must specify the variables and pressure levels desired.
@@ -278,22 +302,33 @@ class ERA5Reanalysis(object):
         if len(variables) == 0:
             print('ERA5Reanalysis.retrieve: no variables specified; will do nothing.')
             return
-        if len(levels) == 0:
-            print('ERA5Reanalysis.retrieve: no pressure levels specified; will do nothing.')
-            return
+        assert hasattr(levels, '__iter__')
         if int(n_proc) < 0:
             raise ValueError("'multiprocess' must be an integer >= 0")
 
         # Create the requests
         requests = []
         self._set_file_names()
-        for variable in variables:
-            for level in levels:
+        for variable in self.dataset_variables:
+            if variable in pressure_variable_names.keys():
+                for level in self.dataset_levels:
+                    request = {
+                        'product_type': 'reanalysis',
+                        'format': 'netcdf',
+                        'variable': variable,
+                        'pressure_level': level,
+                        'year': years,
+                        'month': months,
+                        'day': days,
+                        'time': hours
+                    }
+                    request.update(request_kwargs)
+                    requests.append(request)
+            else:
                 request = {
                     'product_type': 'reanalysis',
                     'format': 'netcdf',
                     'variable': variable,
-                    'pressure_level': level,
                     'year': years,
                     'month': months,
                     'day': days,
@@ -314,7 +349,7 @@ class ERA5Reanalysis(object):
 
         if n_proc == 1:
             for file, request in zip(self.raw_files, requests):
-                call_fetch((self, request, file, verbose))
+                self._fetch(request, file, verbose)
         else:
             pool = multiprocessing.Pool(processes=n_proc)
             pool.map(call_fetch, zip(it.repeat(self), requests, self.raw_files, it.repeat(verbose)))
@@ -323,16 +358,27 @@ class ERA5Reanalysis(object):
             pool.join()
 
     def _fetch(self, request, file_name, verbose):
+        # Check for existing file
+        if _check_exists(file_name):
+            print('ERA5Reanalysis.retrieve: WARNING: file %s already exists; omitting' % file_name)
+            return
         # Fetch the file
         c = cdsapi.Client()
-        if verbose:
-            print('ERA5Reanalysis.retrieve: fetching %s at %s mb' % (request['variable'], request['pressure_level']))
-        c.retrieve('reanalysis-era5-pressure-levels', request, file_name + '.tmp')
+        pid = os.getpid()
+        if request['variable'] in pressure_variable_names.keys():
+            if verbose:
+                print('PID %s: ERA5Reanalysis.retrieve: fetching %s at %s mb' %
+                      (pid, request['variable'], request['pressure_level']))
+            c.retrieve('reanalysis-era5-pressure-levels', request, file_name + '.tmp')
 
-        # Add a level dimension to the file (not present by default
-        if verbose:
-            print('Adding level dimension')
-        self._process_temp_file(file_name, float(request['pressure_level']))
+            # Add a level dimension to the file (not present by default)
+            if verbose:
+                print('PID %s: Adding level dimension' % pid)
+            self._process_temp_file(file_name, float(request['pressure_level']))
+        else:
+            if verbose:
+                print('PID %s: ERA5Reanalysis.retrieve: fetching %s' % (pid, request['variable']))
+            c.retrieve('reanalysis-era5-single-levels', request, file_name)
 
     def _process_temp_file(self, file_name, level):
         ds = xr.open_dataset(file_name + '.tmp')
@@ -350,8 +396,6 @@ class ERA5Reanalysis(object):
         """
         if len(self.dataset_variables) == 0:
             raise ValueError('set the variables to open with the set_variables() method')
-        if len(self.dataset_levels) == 0:
-            raise ValueError('set the pressure levels to open with the set_levels() method')
         self._set_file_names()
         self.Dataset = xr.open_mfdataset(self.raw_files, **dataset_kwargs)
         self.dataset_dates = self.Dataset['time']

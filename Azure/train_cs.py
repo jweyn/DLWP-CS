@@ -158,8 +158,6 @@ else:  # we must have a list of datetimes
     train_data = data.sel(sample=train_set)
 
 # Build the data generators
-if not(not load_memory) or use_keras_fit:
-    print('Loading data to memory...')
 generator = SeriesDataGenerator(dlwp, train_data, rank=3, input_sel=io_selection, output_sel=io_selection,
                                 input_time_steps=io_time_steps, output_time_steps=io_time_steps,
                                 sequence=integration_steps, add_insolation=add_solar,
@@ -167,10 +165,11 @@ generator = SeriesDataGenerator(dlwp, train_data, rank=3, input_sel=io_selection
 if use_keras_fit:
     p_train, t_train = generator.generate([])
 if validation_data is not None:
+    print('Loading validation data to memory...')
     val_generator = SeriesDataGenerator(dlwp, validation_data, input_sel=io_selection, output_sel=io_selection,
                                         rank=3, input_time_steps=io_time_steps, output_time_steps=io_time_steps,
                                         sequence=integration_steps, add_insolation=add_solar,
-                                        batch_size=batch_size, load=load_memory)
+                                        batch_size=batch_size, load='minimal')
     if use_keras_fit:
         val = val_generator.generate([])
 else:
@@ -187,7 +186,7 @@ cso = generator.output_convolution_shape
 input_seq = (integration_steps > 1 and (isinstance(add_solar, str) or add_solar))
 
 # Define layers. Must be defined outside of model function so we use the same weights at each integration step.
-input_0 = Input(shape=cs, name='input_0')
+input_0 = Input(shape=cs, name='main_input')
 if input_seq:
     more_inputs = [Input(shape=generator.insolation_shape, name='input_%d' % d) for d in range(1, integration_steps)]
 cube_padding_1 = CubeSpherePadding2D(1, data_format='channels_first')
