@@ -824,12 +824,12 @@ class CubeSphereConv2D(Layer):
         if self.use_bias:
             self.equatorial_bias = self.add_weight(shape=(self.filters,),
                                                    initializer=self.bias_initializer,
-                                                   name='bias',
+                                                   name='equatorial_bias',
                                                    regularizer=self.bias_regularizer,
                                                    constraint=self.bias_constraint)
             self.polar_bias = self.add_weight(shape=(self.filters,),
                                               initializer=self.bias_initializer,
-                                              name='bias',
+                                              name='polar_bias',
                                               regularizer=self.bias_regularizer,
                                               constraint=self.bias_constraint)
 

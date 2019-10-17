@@ -213,6 +213,7 @@ class TimeSeriesEstimator(object):
 
         # Target shape
         t_shape = t[0].shape if isinstance(t, (list, tuple)) else t.shape
+        t = None
 
         # A DLWPFunctional model which does not have the same inputs/outputs must have some programmatic way of fixing
         # this issue built-in (if it is trained to minimize several iterations of the model). Thus we fall back to the
@@ -223,19 +224,21 @@ class TimeSeriesEstimator(object):
                 # For the DLWPFunctional model, just use its predict_timeseries API, which handles effective steps
                 result = self.model.predict_timeseries(predictors, steps, keep_time_dim=True,
                                                        **kwargs).reshape((-1,) + t_shape)[:effective_steps, ...]
+                result = result.transpose((0, 1) + tuple(range(2, len(result.shape)))).copy()
             else:
                 # If insolation is requested, intelligently add it in the same way the generator does
                 sequence_steps = int(np.ceil(steps / self.model._n_steps / self.model.time_dim))
 
                 # Giant forecast array
-                result = np.full((sequence_steps, self.model._n_steps) + t_shape, np.nan, dtype=np.float32)
+                result = np.full((t_shape[0], sequence_steps, self.model._n_steps) + t_shape[1:],
+                                 np.nan, dtype=np.float32)
 
                 # Iterate
                 new_t = p_da.sample[:]
                 for s in range(sequence_steps):
                     if 'verbose' in kwargs and kwargs['verbose'] > 0:
                         print('Time step %d/%d' % (s + 1, sequence_steps))
-                    result[s] = np.array(self.model.predict(predictors, **kwargs))
+                    result[:, s] = np.stack(self.model.predict(predictors, **kwargs), axis=1)
 
                     # Assign new insolation to list of inputs
                     new_t = new_t + self._output_time_steps * self.model._n_steps * self._dt
@@ -246,25 +249,32 @@ class TimeSeriesEstimator(object):
                                       for m in range(self.model._n_steps)]
 
                     predictors = [
-                        np.concatenate([result[s][-1].reshape(self.shape), new_insolation[0]],
+                        np.concatenate([result[:, s, -1].reshape(self.shape), new_insolation[0]],
                                        axis=2).reshape(self.convolution_shape)
                     ] + new_insolation[1:]
 
-                result = result.reshape((-1,) + t_shape)[:effective_steps, ...]
+                    # Add constants
+                    if hasattr(self.generator, 'constants') and self.generator.constants is not None:
+                        predictors.append(np.repeat(np.expand_dims(self.generator.constants, axis=0),
+                                                    len(p_da.sample), axis=0))
+
+                n_dim_1 = result.size // int(np.prod(t_shape))
+                result.shape = (t_shape[0], n_dim_1,) + t_shape[1:]
+                result = result[:, :effective_steps, ...]
         else:
             # Giant forecast array
-            result = np.full((effective_steps,) + t_shape, np.nan, dtype=np.float32)
+            result = np.full((t_shape[0], effective_steps,) + t_shape[1:], np.nan, dtype=np.float32)
 
             # Iterate prediction forward for a regular DLWP Sequential NN
             for s in range(effective_steps):
                 if 'verbose' in kwargs and kwargs['verbose'] > 0:
                     print('Time step %d/%d' % (s + 1, effective_steps))
-                result[s] = self.model.predict(p_da.values.reshape(p_shape), **kwargs)
+                result[:, s] = self.model.predict(p_da.values.reshape(p_shape), **kwargs)
 
                 # Add metadata to the prediction
                 r_da = xr.DataArray(
-                    result[s].reshape((p_shape[0], self._output_time_steps, -1,) +
-                                      self.generator.convolution_shape[-self.rank:]),
+                    result[:, s].reshape((p_shape[0], self._output_time_steps, -1,) +
+                                         self.generator.convolution_shape[-self.rank:]),
                     coords=([p_da.sample + (es + self._interval - 1) * self._dt,
                              np.arange(self._output_time_steps), self._output_sel['varlev']] +
                             [np.arange(d) for d in self.generator.convolution_shape[-self.rank:]]),
@@ -304,15 +314,16 @@ class TimeSeriesEstimator(object):
 
         # Return a DataArray. Keep the actual model initialization, that is, the last available time in the inputs,
         # as the time
-        result = result.reshape((effective_steps, p_shape[0], self._output_time_steps, -1,) +
-                                self.generator.convolution_shape[-self.rank:])
+        rv = result.view()
+        rv.shape = (p_shape[0], effective_steps, self._output_time_steps, -1,) + \
+            self.generator.convolution_shape[-self.rank:]
         if f_hour_timedelta_type:
             dt = self._dt.values
         else:
             dt = np.array(self._dt.values.astype('timedelta64[h]').astype('float'))
         if keep_time_dim:
-            result = xr.DataArray(
-                result,
+            result_da = xr.DataArray(
+                rv.transpose((1, 0) + tuple(range(2, len(rv.shape)))),
                 coords=[
                     np.arange(dt, (effective_steps * (es + self._interval - 1) + 1) * dt,
                               (es + self._interval - 1) * dt),
@@ -324,21 +335,19 @@ class TimeSeriesEstimator(object):
                 name='forecast'
             )
             if self.rank == 2:
-                result = result.rename({'x0': 'lat', 'x1': 'lon'}).assign_coords(lat=self.generator.ds.lat,
-                                                                                 lon=self.generator.ds.lon)
+                result_da = result_da.rename({'x0': 'lat', 'x1': 'lon'}).assign_coords(lat=self.generator.ds.lat,
+                                                                                       lon=self.generator.ds.lon)
         else:
             # To create a correct time series, we must retain only the effective steps
             if not keep_inputs:
                 if prefer_first_times:
-                    result = result[:, :, :es]
-            result = result.transpose((0, 2, 1, 3,) + tuple(range(4, 4 + self.rank)))
-            result = result.reshape((-1,) + result.shape[2:])
-            result = xr.DataArray(
-                result,
+                    rv = rv[:, :, :es]
+            rv.shape = (t_shape[0], rv.shape[1] * rv.shape[2]) + rv.shape[3:]
+            result_da = xr.DataArray(
+                rv.transpose((1, 0) + tuple(range(2, len(rv.shape)))),
                 coords=[
                     np.array([(np.arange(0, es) + self._interval + e * (es - 1 + self._interval)) * dt
                               for e in range(effective_steps)]).flatten(),
-                    # np.arange(self._dt.values, (effective_steps * es + 1) * self._dt.values, self._dt.values),
                     sample_coord + (self._input_time_steps - 1) * self._dt,
                     self._output_sel['varlev'],
                 ] + [np.arange(d) for d in self.generator.convolution_shape[-self.rank:]],
@@ -346,16 +355,16 @@ class TimeSeriesEstimator(object):
                 name='forecast'
             )
             if self.rank == 2:
-                result = result.rename({'x0': 'lat', 'x1': 'lon'}).assign_coords(lat=self.generator.ds.lat,
-                                                                                 lon=self.generator.ds.lon)
-            result = result.isel(f_hour=slice(0, steps))
+                result_da = result_da.rename({'x0': 'lat', 'x1': 'lon'}).assign_coords(lat=self.generator.ds.lat,
+                                                                                       lon=self.generator.ds.lon)
+            result_da = result_da.isel(f_hour=slice(0, steps))
 
         # Expand back out to variable/level pairs
         if self._uses_varlev:
-            return result
+            return result_da
         else:
             var, lev = self._output_sel['variable'], self._output_sel['level']
             vl = pd.MultiIndex.from_product((var, lev), names=('variable', 'level'))
-            result = result.assign_coords(varlev=vl).unstack('varlev')
-            result = result.transpose('f_hour', 'time', 'variable', 'level', 'lat', 'lon')
-            return result
+            result_da = result_da.assign_coords(varlev=vl).unstack('varlev')
+            result_da = result_da.transpose('f_hour', 'time', 'variable', 'level', 'lat', 'lon')
+            return result_da

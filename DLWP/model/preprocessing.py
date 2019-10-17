@@ -864,3 +864,32 @@ def std_by_batch(da, batch_size, axis=0, mean=None):
     for b in batches:
         total += np.sum((da.isel(**{dim: slice(b, min(b + batch_size, size))}).values - mean) ** 2.)
     return np.sqrt(total / da.size)
+
+
+def get_constants(constants=None, **kwargs):
+    """
+    Return an array of constants from the files in 'constants'. This latter variable should be an iterable
+    containing length-2 pairs of (file_name, variable_name_in_file). For example, (('land_sea_mask.nc, 'lsm'),).
+    Each variable from the files must have the same shape, and these shapes should match the predictor data to be used
+    in the model training.
+
+    :param constants: iter: iterable of length-2 (file_name, variable_name) pairs
+    :param kwargs: passed to xr.open_dataset() for each file
+    :return: ndarray: array of constants stacked along a new dimension ('channels')
+    """
+    if constants is None:
+        return
+
+    if not hasattr(constants, '__iter__'):
+        raise TypeError("'constants' must be an iterable of length-2 (file_name, variable) pairs")
+    for c in constants:
+        if len(c) != 2:
+            raise ValueError("each element of 'constants' must have length 2 (file_name, variable)")
+
+    result = []
+    for c in constants:
+        ds_c = xr.open_dataset(c[0], **kwargs)
+        result.append(ds_c.variables[c[1]].values)
+    result = np.stack(result, axis=0)
+
+    return result

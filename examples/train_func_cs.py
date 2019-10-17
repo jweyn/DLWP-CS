@@ -15,6 +15,7 @@ import pandas as pd
 import xarray as xr
 from datetime import datetime
 from DLWP.model import DLWPFunctional, SeriesDataGenerator
+from DLWP.model.preprocessing import get_constants
 from DLWP.util import save_model, train_test_split_ind
 from keras.callbacks import History, TensorBoard
 
@@ -30,14 +31,15 @@ import keras.backend as K
 
 # File paths and names
 root_directory = '/home/disk/wave2/jweyn/Data/DLWP'
-predictor_file = os.path.join(root_directory, 'era5_2deg_3h_CS_1979-2018_z-tau.nc')
-model_file = os.path.join(root_directory, 'dlwp_era5_3h_CS48_tau-sol_UNET')
-log_directory = os.path.join(root_directory, 'logs', 'era5_3h_CS48_tau-sol_UNET')
+predictor_file = os.path.join(root_directory, 'era5_2deg_3h_CS_1979-2018_z-tau-t2_500-1000.nc')
+model_file = os.path.join(root_directory, 'dlwp_era5_3h_CS48_tau-sfc1000_UNET')
+log_directory = os.path.join(root_directory, 'logs', 'era5_3h_CS48_tau-sfc1000_UNET')
+reverse_lat = False
 
 # Optional paths to files containing constant fields to add to the inputs
 constant_fields = [
-    os.path.join(root_directory, 'era5_2deg_3h_CS_land_sea_mask.nc'),
-    # os.path.join(root_directory, 'era5_2deg_3h_CS_scaled_topo.nc')
+    # (os.path.join(root_directory, 'era5_2deg_3h_CS_land_sea_mask.nc'), 'lsm'),
+    # (os.path.join(root_directory, 'era5_2deg_3h_CS_scaled_topo.nc'), 'z')
 ]
 
 # NN parameters. Regularization is applied to LSTM layers by default. weight_loss indicates whether to weight the
@@ -56,7 +58,7 @@ skip_connections = True
 # the inputs and outputs match exactly (for now). Ensure that the selections use LISTS of values (even for only 1) to
 # keep dimensions correct. The number of output iterations to train on is given by integration_steps. The actual number
 # of forecast steps (units of model delta t) is io_time_steps * integration_steps.
-io_selection = {'varlev': ['z/500', 'tau/300-700']}
+io_selection = {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0']}
 io_time_steps = 2
 integration_steps = 2
 # Add incoming solar radiation forcing
@@ -84,8 +86,9 @@ train_set = list(pd.date_range(datetime(1979, 1, 1, 6), datetime(2012, 12, 31, 1
 
 data = xr.open_dataset(predictor_file, chunks={'sample': 1})
 # Fix negative latitude for solar radiation input
-data.lat.load()
-data.lat[:] = -1. * data.lat.values
+if reverse_lat:
+    data.lat.load()
+    data.lat[:] = -1. * data.lat.values
 
 if 'time_step' in data.dims:
     time_dim = data.dims['time_step']
@@ -94,15 +97,7 @@ else:
 n_sample = data.dims['sample']
 
 has_constants = not(not constant_fields)
-if has_constants:
-    constants = []
-    for cf in constant_fields:
-        ds_c = xr.open_dataset(cf)
-        constants.append(ds_c.variables[ds_c.data_vars[0]].values)
-
-    constants = np.stack(constants, axis=0)
-else:
-    constants = None
+constants = get_constants(constant_fields or None)
 
 
 #%% Create a model and the data generators
@@ -342,7 +337,7 @@ else:
     if input_solar:
         inputs = inputs + solar_inputs
     if has_constants:
-        inputs = inputs + constant_input
+        inputs = inputs + [constant_input]
 model = Model(inputs=inputs, outputs=complete_model(inputs))
 
 # No weighted loss available for cube sphere at the moment, but we can weight each integration sequence

@@ -21,6 +21,7 @@ import matplotlib.pyplot as plt
 
 from DLWP.model import SeriesDataGenerator, TimeSeriesEstimator
 from DLWP.model import verify
+from DLWP.model.preprocessing import get_constants
 from DLWP.plot import history_plot, forecast_example_plot, zonal_mean_plot, remove_chars
 from DLWP.util import load_model, train_test_split_ind
 from DLWP.data import CFSReforecast
@@ -33,67 +34,82 @@ from DLWP.remap import CubeSphereRemap
 # with the conversion to the face coordinate. The scale file contains 'mean' and 'std' variables to perform inverse
 # scaling back to real data units.
 root_directory = '/home/disk/wave2/jweyn/Data/DLWP'
-predictor_file = '%s/cfs_6h_CS48_1979-2010_z3-5-7-10_tau_sfc.nc' % root_directory
-scale_file = '%s/cfs_6h_1979-2010_z3-5-7-10_tau_sfc.nc' % root_directory
+# predictor_file = '%s/cfs_6h_CS48_1979-2010_z3-5-7-10_tau_sfc.nc' % root_directory
+# scale_file = '%s/cfs_6h_1979-2010_z3-5-7-10_tau_sfc.nc' % root_directory
+predictor_file = '%s/era5_2deg_3h_CS_1979-2018_z-tau-t2_500-1000.nc' % root_directory
+scale_file = '%s/era5_2deg_3h_1979-2018_z-tau-t2_500-1000.nc' % root_directory
 
 # The remap file contains the verification data passed through the same remapping scheme as the predictors. That is,
 # it contains the predictors, mapped to the cubed sphere, then remapped back with the inverse transform. If this file
 # does not exist, then it will be created from the predictor file, which, notably, uses a lot of memory and is quite
 # slow.
-remapped_file = '%s/cfs_6h_LL48_1979-2010_z3-5-7-10_tau_sfc.nc' % root_directory
+remapped_file = scale_file
 reverse_lat = False
 
 # Map files for cubed sphere remapping
-map_files = ('/home/disk/brume/jweyn/Documents/DLWP/map_LL73x144_CS48.nc',
-             '/home/disk/brume/jweyn/Documents/DLWP/map_CS48_LL73x144.nc')
+map_files = ('/home/disk/brume/jweyn/Documents/DLWP/map_LL91x180_CS48.nc',
+             '/home/disk/brume/jweyn/Documents/DLWP/map_CS48_LL91x180.nc')
 
 # Names of model files, located in the root_directory, and labels for those models
+
+# models = [
+#     'dlwp_6h_CS48_3var4lev_T2_UNET'
+# ]
+# model_labels = [
+#     '3-variable 4-level 2m-T UNET'
+# ]
 models = [
-    'dlwp_6h_CS48_tau_unet0-leaky-avg',
-    'dlwp_6h_CS48_tau-sol_unet02-leaky-avg',
-    'dlwp_6h_CS48_tau_T2_unet01-leaky-avg',
-    'dlwp_6h_CS48_tau-sol_T2_unet01-leaky-avg',
-    'dlwp_6h_CS48_surfboard_unet01',
-    'dlwp_6h_CS48_surfboard_T2_unet01'
+    'dlwp_era5_3h_CS48_tau-sol_UNET',
+    'dlwp_era5_6h_CS48_tau-sol_UNET',
+    'dlwp_era5_3h_CS48_tau-sfc1000_UNET',
+    'dlwp_era5_3h_CS48_tau-sfc1000-lsm_UNET',
 ]
 model_labels = [
-    r'$\tau$ CS 48 U-Net leaky avg',
-    r'$\tau$-SOL CS 48 U-Net v2 leaky avg',
-    r'$\tau$ CS 48 U-Net v1 T2 leaky avg',
-    r'$\tau$-SOL CS 48 U-Net v1 T2 leaky avg',
-    r'$\tau$-SOL-surf CS 48 U-Net v1 leaky avg',
-    r'$\tau$-SOL-surf CS 48 U-Net v1 T2 leaky avg'
+    'ERA-3h tau SOL UNET',
+    'ERA-6h tau SOL UNET',
+    'ERA-3h tau z1000 t2 SOL UNET',
+    'ERA-3h tau z1000 t2 SOL LSM UNET',
 ]
 
 # Optional list of selections to make from the predictor dataset for each model. This is useful if, for example,
 # you want to examine models that have different numbers of vertical levels but one predictor dataset contains
 # the data that all models need. Separate input and output selections are available for models using different inputs
 # and outputs. Also specify the number of input/output time steps in each model.
-input_selection = [
-    {'varlev': ['HGT/500', 'THICK/300-700']},
-    {'varlev': ['HGT/500', 'THICK/300-700']},
-    {'varlev': ['HGT/500', 'THICK/300-700']},
-    {'varlev': ['HGT/500', 'THICK/300-700']},
-    {'varlev': ['HGT/500', 'THICK/300-700', 'PRMSL/0', 'TMP2/0']},
-    {'varlev': ['HGT/500', 'THICK/300-700', 'PRMSL/0', 'TMP2/0']},
+# input_selection = output_selection = [
+#     {'varlev': [
+#         'HGT/200', 'HGT/500', 'HGT/850', 'HGT/1000',
+#         'TMP/200', 'TMP/500', 'TMP/850', 'TMP/1000',
+#         'R H/200', 'R H/500', 'R H/850', 'R H/1000',
+#         'U GRD/850', 'TMP2/0'
+#     ]}
+# ]
+input_selection = output_selection = [
+    {'varlev': ['z/500', 'tau/300-700']},
+    {'varlev': ['z/500', 'tau/300-700']},
+    {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0']},
+    {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0']},
 ]
-output_selection = [
-    {'varlev': ['HGT/500', 'THICK/300-700']},
-    {'varlev': ['HGT/500', 'THICK/300-700']},
-    {'varlev': ['HGT/500', 'THICK/300-700']},
-    {'varlev': ['HGT/500', 'THICK/300-700']},
-    {'varlev': ['HGT/500', 'THICK/300-700', 'PRMSL/0', 'TMP2/0']},
-    {'varlev': ['HGT/500', 'THICK/300-700', 'PRMSL/0', 'TMP2/0']},
+
+# Optional added constant inputs
+constant_fields = [
+    None,
+    None,
+    None,
+    [
+        (os.path.join(root_directory, 'era5_2deg_3h_CS_land_sea_mask.nc'), 'lsm'),
+    ],
 ]
-add_insolation = [False, True, False, True, True, True]
+
+# Other required parameters
+add_insolation = [True] * len(models)
 input_time_steps = [2] * len(models)
 output_time_steps = [2] * len(models)
 
 # Validation set to use. Either an integer (number of validation samples, taken from the end), or an iterable of
 # pandas datetime objects.
 # validation_set = 4 * (365 * 4 + 1)
-start_date = datetime(2003, 1, 1, 0)
-end_date = datetime(2003, 12, 31, 18)
+start_date = datetime(2013, 1, 1, 0)
+end_date = datetime(2013, 12, 31, 18)
 validation_set = pd.date_range(start_date, end_date, freq='6H')
 # validation_set = [d for d in validation_set if d.month in [6, 7, 8]]
 validation_set = np.array(validation_set, dtype='datetime64[ns]')
@@ -121,7 +137,7 @@ lat_range = [-90., 90.]
 # Provide as a dictionary to extract to kwargs. If  None, then averages all variables. Cannot be None if using a
 # barotropic model for comparison (specify Z500).
 selection = {
-    'varlev': 'HGT/500'
+    'varlev': 'z/500'
 }
 
 # Scale the variables to original units
@@ -137,9 +153,9 @@ plot_mse = True
 plot_spread = False
 plot_mean = False
 method = 'rmse'
-mse_title = r'$Z_{500}$; 2003; global'  # '20-70$^{\circ}$N'
-mse_file_name = 'rmse_tau-CS48-unet-sfc.pdf'
-mse_pkl_file = 'rmse_tau-CS48-unet-sfc.pkl'
+mse_title = r'$Z_{500}$; 2013; global'  # '20-70$^{\circ}$N'
+mse_file_name = 'rmse_tau-CS48-UNET_era-sfc-badsol.pdf'
+mse_pkl_file = 'rmse_tau-CS48-UNET_era-sfc-badsol.pkl'
 
 
 #%% Pre-processing
@@ -157,8 +173,9 @@ else:  # we must have a list of datetimes
     predictor_ds = all_ds.sel(sample=validation_set)
 
 # Fix negative latitude for solar radiation input
-predictor_ds.lat.load()
-predictor_ds.lat[:] = -1. * predictor_ds.lat.values
+if reverse_lat:
+    predictor_ds.lat.load()
+    predictor_ds.lat[:] = -1. * predictor_ds.lat.values
 
 # Shortcuts for latitude range
 lat_min = np.min(lat_range)
@@ -201,30 +218,33 @@ if remapped_file is None or not(os.path.exists(remapped_file)):
     os.remove(remapped_file + '.tmp')
 
 # Open the remapped file; invert the incorrect latitude direction
-verification_ds = xr.open_dataset(remapped_file)
+remapped_ds = xr.open_dataset(remapped_file)
 if reverse_lat:
-    verification_ds = verification_ds.assign_coords(lat=verification_ds.lat[::-1])
+    remapped_ds = remapped_ds.assign_coords(lat=remapped_ds.lat[::-1])
+
+if 'time_step' in remapped_ds.dims:
+    verification_ds = remapped_ds.isel(time_step=-1)
+if 'varlev' in predictor_ds.dims:
+    remapped_ds = remapped_ds.assign_coords(varlev=predictor_ds['varlev'])
+else:
+    remapped_ds = remapped_ds.assign_coords(variable=predictor_ds['variable'], level=predictor_ds['level'])
+try:
+    remapped_ds = remapped_ds.drop('targets')
+except:
+    pass
 
 # Subset the validation set
 if isinstance(validation_set, int):
     n_sample = all_ds.dims['sample']
     train_set, val_set = train_test_split_ind(n_sample, validation_set, method='last')
-    verification_ds = verification_ds.isel(sample=val_set)
+    verification_ds = remapped_ds.isel(sample=val_set)
 else:  # we must have a list of datetimes
-    verification_ds = verification_ds.sel(sample=validation_set)
+    verification_ds = remapped_ds.sel(sample=validation_set)
 
-if 'time_step' in verification_ds.dims:
-    verification_ds = verification_ds.isel(time_step=-1)
-if 'varlev' in predictor_ds.dims:
-    verification_ds = verification_ds.assign_coords(varlev=predictor_ds['varlev'])
-else:
-    verification_ds = verification_ds.assign_coords(variable=predictor_ds['variable'], level=predictor_ds['level'])
-try:
-    verification_ds = verification_ds.drop('targets')
-except:
-    pass
+verification_ds = verification_ds.sel(**selection)
+
 verification_ds.load()
-verification = verify.verification_from_series(verification_ds.sel(**selection),
+verification = verify.verification_from_series(verification_ds,
                                                forecast_steps=num_forecast_steps, dt=dt, f_hour_timedelta_type=False)
 verification = verification.sel(lat=((verification.lat >= lat_min) & (verification.lat <= lat_max)))
 
@@ -246,12 +266,13 @@ for m, model in enumerate(models):
 
     else:
         # Create data generator
+        constants = get_constants(constant_fields[m])
         sequence = dlwp._n_steps if hasattr(dlwp, '_n_steps') and dlwp._n_steps > 1 else None
         val_generator = SeriesDataGenerator(dlwp, predictor_ds, rank=3, add_insolation=add_insolation[m],
                                             input_sel=input_selection[m], output_sel=output_selection[m],
                                             input_time_steps=input_time_steps[m],
                                             output_time_steps=output_time_steps[m],
-                                            sequence=sequence, batch_size=64, load=False)
+                                            sequence=sequence, batch_size=64, load=False, constants=constants)
 
         estimator = TimeSeriesEstimator(dlwp, val_generator)
 
@@ -289,15 +310,17 @@ for m, model in enumerate(models):
         time_series = time_series.assign_coords(lat=verification_ds.lat[:])
     except:
         pass
-    time_series = time_series.sel(lat=((time_series.lat >= lat_min) & (time_series.lat <= lat_max)))
+    time_intersection = np.intersect1d(time_series.time.values, verification.time.values, assume_unique=True)
+    fh_intersection = np.intersect1d(time_series.f_hour.values, verification.f_hour.values, assume_unique=True)
+    time_series = time_series.sel(lat=((time_series.lat >= lat_min) & (time_series.lat <= lat_max)),
+                                  time=time_intersection, f_hour=fh_intersection)
+    time_series.load()
     if scale_variables:
         time_series = time_series * sel_std + sel_mean
 
     # Calculate the MSE for each forecast hour relative to observations
-    intersection = np.intersect1d(time_series.time.values, verification.time.values, assume_unique=True)
-    mse.append(verify.forecast_error(time_series.sel(time=intersection).values,
-                                     verification.isel(f_hour=slice(0, len(time_series.f_hour)))
-                                     .sel(time=intersection).values,
+    mse.append(verify.forecast_error(time_series.values,
+                                     verification.sel(time=time_intersection, f_hour=fh_intersection).values,
                                      method=method))
 
     # Plot learning curves
@@ -325,7 +348,7 @@ for m, model in enumerate(models):
 
     # Clear the model
     dlwp = None
-    # time_series = None
+    time_series = None
     K.clear_session()
 
 
@@ -390,7 +413,7 @@ if cfs_ds is not None and plot_mse:
 if plot_mse:
     print('Calculating persistence forecasts...')
     init = verification_ds.predictors.sel(lat=((verification_ds.lat >= lat_min) & (verification_ds.lat <= lat_max)),
-                                          sample=verification.time, **selection)
+                                          sample=verification.time)
     init.load()
 
     if scale_variables:
@@ -403,7 +426,7 @@ if plot_mse:
     f_hours.append(np.arange(dt, num_forecast_steps * dt + 1., dt))
 
     print('Calculating climatology forecasts...')
-    climo_data = verification_ds['predictors'].sel(
+    climo_data = remapped_ds['predictors'].sel(
         lat=((verification_ds.lat >= lat_min) & (verification_ds.lat <= lat_max)), **selection)
     if scale_variables:
         climo_data = climo_data * sel_std + sel_mean

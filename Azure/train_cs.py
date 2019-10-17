@@ -22,6 +22,7 @@ import pandas as pd
 import xarray as xr
 from datetime import datetime
 from DLWP.model import DLWPFunctional, SeriesDataGenerator
+from DLWP.model.preprocessing import get_constants
 from DLWP.util import save_model, train_test_split_ind
 from keras.callbacks import History, TensorBoard
 from azureml.core import Run
@@ -66,13 +67,20 @@ root_directory = args.root_directory
 predictor_file = os.path.join(root_directory, args.predictor_file)
 model_file = os.path.join(root_directory, args.model_file)
 log_directory = os.path.join(root_directory, args.log_directory)
+reverse_lat = False
+
+# Optional paths to files containing constant fields to add to the inputs
+constant_fields = [
+    # (os.path.join(root_directory, 'era5_2deg_3h_CS_land_sea_mask.nc'), 'lsm'),
+    # (os.path.join(root_directory, 'era5_2deg_3h_CS_scaled_topo.nc'), 'z')
+]
 
 # NN parameters. Regularization is applied to LSTM layers by default. weight_loss indicates whether to weight the
 # loss function preferentially in the mid-latitudes.
 model_is_convolutional = True
-min_epochs = 100
-max_epochs = 200
-patience = 50
+min_epochs = 50
+max_epochs = 100
+patience = 20
 batch_size = 64
 lambda_ = 1.e-4
 loss_by_step = None
@@ -83,11 +91,11 @@ skip_connections = True
 # the inputs and outputs match exactly (for now). Ensure that the selections use LISTS of values (even for only 1) to
 # keep dimensions correct. The number of output iterations to train on is given by integration_steps. The actual number
 # of forecast steps (units of model delta t) is io_time_steps * integration_steps.
-io_selection = {'varlev': ['HGT/500', 'THICK/300-700']}
+io_selection = {'varlev': ['z/500', 'tau/300-700']}
 io_time_steps = 2
 integration_steps = 2
 # Add incoming solar radiation forcing
-add_solar = False
+add_solar = True
 
 # If system memory permits, loading the predictor data can greatly increase efficiency when training on GPUs, if the
 # train computation takes less time than the data loading.
@@ -103,11 +111,11 @@ use_keras_fit = False
 # Validation set to use. Either an integer (number of validation samples, taken from the end), or an iterable of
 # pandas datetime objects. The train set can be set to the first <integer> samples, an iterable of dates, or None to
 # simply use the remaining points. Match the type of validation_set.
-validation_set = list(pd.date_range(datetime(2003, 1, 1, 0), datetime(2006, 12, 31, 18), freq='6H'))
-train_set = list(pd.date_range(datetime(1979, 1, 1, 6), datetime(2002, 12, 31, 18), freq='6H'))
+validation_set = list(pd.date_range(datetime(2013, 1, 1, 0), datetime(2016, 12, 31, 18), freq='3H'))
+train_set = list(pd.date_range(datetime(1979, 1, 1, 6), datetime(2012, 12, 31, 18), freq='3H'))
 
 
-#%% Open data. If temporary file is specified, copy it there.
+#%% Open data
 
 if args.temp_dir != 'None':
     new_predictor_file = os.path.join(args.temp_dir, args.predictor_file)
@@ -118,17 +126,21 @@ if args.temp_dir != 'None':
         shutil.copy(predictor_file, new_predictor_file, follow_symlinks=True)
     data = xr.open_dataset(new_predictor_file, chunks={'sample': batch_size})
 else:
-    data = xr.open_dataset(predictor_file, chunks={'sample': batch_size})
+    data = xr.open_dataset(predictor_file, chunks={'sample': 1})
 
 # Fix negative latitude for solar radiation input
-data.lat.load()
-data.lat[:] = -1. * data.lat.values
+if reverse_lat:
+    data.lat.load()
+    data.lat[:] = -1. * data.lat.values
 
 if 'time_step' in data.dims:
     time_dim = data.dims['time_step']
 else:
     time_dim = 1
 n_sample = data.dims['sample']
+
+has_constants = not(not constant_fields)
+constants = get_constants(constant_fields or None)
 
 
 #%% Create a model and the data generators
@@ -161,7 +173,8 @@ else:  # we must have a list of datetimes
 generator = SeriesDataGenerator(dlwp, train_data, rank=3, input_sel=io_selection, output_sel=io_selection,
                                 input_time_steps=io_time_steps, output_time_steps=io_time_steps,
                                 sequence=integration_steps, add_insolation=add_solar,
-                                batch_size=batch_size, load=load_memory, shuffle=shuffle)
+                                batch_size=batch_size, load=load_memory, shuffle=shuffle,
+                                delay_load=False, constants=constants)
 if use_keras_fit:
     p_train, t_train = generator.generate([])
 if validation_data is not None:
@@ -169,7 +182,8 @@ if validation_data is not None:
     val_generator = SeriesDataGenerator(dlwp, validation_data, input_sel=io_selection, output_sel=io_selection,
                                         rank=3, input_time_steps=io_time_steps, output_time_steps=io_time_steps,
                                         sequence=integration_steps, add_insolation=add_solar,
-                                        batch_size=batch_size, load='minimal')
+                                        batch_size=batch_size, load='minimal',
+                                        delay_load=False, constants=constants)
     if use_keras_fit:
         val = val_generator.generate([])
 else:
@@ -180,15 +194,17 @@ else:
 
 #%% Compile the model structure with some generator data information
 
-# Up-sampling convolutional network with LSTM layer
+# Up-sampling convolutional network or U-net
 cs = generator.convolution_shape
 cso = generator.output_convolution_shape
-input_seq = (integration_steps > 1 and (isinstance(add_solar, str) or add_solar))
+input_solar = (integration_steps > 1 and (isinstance(add_solar, str) or add_solar))
 
 # Define layers. Must be defined outside of model function so we use the same weights at each integration step.
-input_0 = Input(shape=cs, name='main_input')
-if input_seq:
-    more_inputs = [Input(shape=generator.insolation_shape, name='input_%d' % d) for d in range(1, integration_steps)]
+main_input = Input(shape=cs, name='main_input')
+if input_solar:
+    solar_inputs = [Input(shape=generator.insolation_shape, name='solar_%d' % d) for d in range(1, integration_steps)]
+if has_constants:
+    constant_input = Input(shape=constants.shape, name='constants')
 cube_padding_1 = CubeSpherePadding2D(1, data_format='channels_first')
 pooling_2 = AveragePooling3D((2, 2, 1), data_format='channels_first')
 up_sampling_2 = UpSampling3D((2, 2, 1), data_format='channels_first')
@@ -283,6 +299,33 @@ def basic_model(x):
     return x
 
 
+def skip_model(x):
+    x = cube_padding_1(x)
+    x = relu(conv_2d_1(x))
+    # x = cube_padding_1(x)
+    # x = relu(conv_2d_1_2(x))
+    x, x1 = split_1_1(x), split_1_2(x)
+    x = pooling_2(x)
+    x = cube_padding_1(x)
+    x = relu(conv_2d_2(x))
+    x, x2 = split_2_1(x), split_2_2(x)
+    x = pooling_2(x)
+    x = cube_padding_1(x)
+    x = relu(conv_2d_3(x))
+    x = up_sampling_2(x)
+    x = cube_padding_1(x)
+    x = relu(conv_2d_4(x))
+    x = concatenate([x, x2], axis=1)
+    x = up_sampling_2(x)
+    x = cube_padding_1(x)
+    x = relu(conv_2d_5(x))
+    x = concatenate([x, x1], axis=1)
+    x = cube_padding_1(x)
+    x = relu(conv_2d_5_2(x))
+    x = conv_2d_6(x)
+    return x
+
+
 def unet(x):
     x0 = cube_padding_1(x)
     x0 = relu(conv_2d_1(x0))
@@ -312,20 +355,32 @@ def complete_model(x_in):
     outputs = []
     model_function = unet if skip_connections else basic_model
     is_seq = isinstance(x_in, (list, tuple))
-    outputs.append(model_function(x_in[0] if is_seq else x_in))
+    xi = x_in[0] if is_seq else x_in
+    if is_seq and has_constants:
+        xi = Concatenate(axis=1)([xi, x_in[-1]])
+    outputs.append(model_function(xi))
     for step in range(1, integration_steps):
         xo = outputs[step - 1]
-        if is_seq:
+        if is_seq and input_solar:
             xo = Reshape(generator.shape)(xo)
             xo = Concatenate(axis=2)([xo, x_in[step]])
             xo = Reshape(cs)(xo)
+        if is_seq and has_constants:
+            xo = Concatenate(axis=1)([xo, x_in[-1]])
         outputs.append(model_function(xo))
 
     return outputs
 
 
 # Build the model with inputs and outputs
-inputs = [input_0] + more_inputs if input_seq else input_0
+if not input_solar and not has_constants:
+    inputs = main_input
+else:
+    inputs = [main_input]
+    if input_solar:
+        inputs = inputs + solar_inputs
+    if has_constants:
+        inputs = inputs + [constant_input]
 model = Model(inputs=inputs, outputs=complete_model(inputs))
 
 # No weighted loss available for cube sphere at the moment, but we can weight each integration sequence

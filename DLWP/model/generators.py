@@ -706,10 +706,11 @@ class SeriesDataGenerator(Sequence):
 
         # Add constants
         if self.constants is not None:
+            constants = np.repeat(np.expand_dims(self.constants, axis=0), n_sample, axis=0)
             if isinstance(p, list):
-                p = p + [self.constants]
+                p = p + [constants]
             else:
-                p = [p, self.constants]
+                p = [p, constants]
 
         return p, targets
 
