@@ -334,16 +334,16 @@ def insolation(dates, lat, lon, S=1., daily=False):
     # Get the day of year. Ignore leap days.
     days = pd.Series(dates)
     days = days.apply(day_of_year)
-    days_arr = days.values.copy()
+    days_arr = days.values.copy().astype(np.float32)
     for d in range(n_dim):
         days_arr = np.expand_dims(days_arr, -1)
     # For daily max values, set the day to 0.5 and the longitude everywhere to 0 (this is approx noon)
     if daily:
         days_arr = 0.5 + np.round(days_arr)
-        new_lon = lon.copy()
+        new_lon = lon.copy().astype(np.float32)
         new_lon[:] = 0.
     else:
-        new_lon = lon
+        new_lon = lon.astype(np.float32)
     # Longitude of the earth relative to the orbit, 1st order approximation
     lambda_m0 = ecc * (1. + beta) * np.sin(om)
     lambda_m = lambda_m0 + 2. * np.pi * (days_arr - 80.5) / 365.

@@ -224,10 +224,13 @@ if reverse_lat:
 
 if 'time_step' in remapped_ds.dims:
     verification_ds = remapped_ds.isel(time_step=-1)
-if 'varlev' in predictor_ds.dims:
-    remapped_ds = remapped_ds.assign_coords(varlev=predictor_ds['varlev'])
-else:
-    remapped_ds = remapped_ds.assign_coords(variable=predictor_ds['variable'], level=predictor_ds['level'])
+try:
+    if 'varlev' in predictor_ds.dims:
+        remapped_ds = remapped_ds.assign_coords(varlev=predictor_ds['varlev'])
+    else:
+        remapped_ds = remapped_ds.assign_coords(variable=predictor_ds['variable'], level=predictor_ds['level'])
+except ValueError:
+    pass
 try:
     remapped_ds = remapped_ds.drop('targets')
 except:

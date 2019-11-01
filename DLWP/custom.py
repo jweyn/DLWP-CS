@@ -737,6 +737,8 @@ class CubeSphereConv2D(Layer):
         flip_north_pole: Boolean, whether to reverse the direction of the
             north pole should that be necessary to match the rotation
             direction of the south pole in the data
+        independent_north_pole: Boolean, if true, learn separate filters
+            for the north and south poles (3 total sets)
         kernel_initializer: Initializer for the `kernel` weights matrix
             (see [initializers](../initializers.md)).
         bias_initializer: Initializer for the bias vector
@@ -765,6 +767,7 @@ class CubeSphereConv2D(Layer):
                  activation=None,
                  use_bias=True,
                  flip_north_pole=True,
+                 independent_north_pole=False,
                  kernel_initializer='glorot_uniform',
                  bias_initializer='zeros',
                  kernel_regularizer=None,
@@ -785,6 +788,7 @@ class CubeSphereConv2D(Layer):
         self.activation = activations.get(activation)
         self.use_bias = use_bias
         self.flip_north_pole = flip_north_pole
+        self.independent_north_pole = independent_north_pole
         self.kernel_initializer = initializers.get(kernel_initializer)
         self.bias_initializer = initializers.get(bias_initializer)
         self.kernel_regularizer = regularizers.get(kernel_regularizer)
@@ -799,6 +803,8 @@ class CubeSphereConv2D(Layer):
         self.equatorial_bias = None
         self.polar_kernel = None
         self.polar_bias = None
+        self.north_pole_kernel = None
+        self.north_pole_bias = None
 
     def build(self, input_shape):
         if self.data_format == 'channels_first':
@@ -821,6 +827,12 @@ class CubeSphereConv2D(Layer):
                                             name='polar_kernel',
                                             regularizer=self.kernel_regularizer,
                                             constraint=self.kernel_constraint)
+        if self.independent_north_pole:
+            self.north_pole_kernel = self.add_weight(shape=kernel_shape,
+                                                     initializer=self.kernel_initializer,
+                                                     name='polar_kernel',
+                                                     regularizer=self.kernel_regularizer,
+                                                     constraint=self.kernel_constraint)
         if self.use_bias:
             self.equatorial_bias = self.add_weight(shape=(self.filters,),
                                                    initializer=self.bias_initializer,
@@ -832,6 +844,12 @@ class CubeSphereConv2D(Layer):
                                               name='polar_bias',
                                               regularizer=self.bias_regularizer,
                                               constraint=self.bias_constraint)
+            if self.independent_north_pole:
+                self.north_pole_bias = self.add_weight(shape=(self.filters,),
+                                                       initializer=self.bias_initializer,
+                                                       name='polar_bias',
+                                                       regularizer=self.bias_regularizer,
+                                                       constraint=self.bias_constraint)
 
         # Set input spec.
         self.input_spec = InputSpec(ndim=self.rank + 2,
@@ -885,7 +903,7 @@ class CubeSphereConv2D(Layer):
             outputs.append(
                 K.conv2d(
                     K.reverse(inputs[..., 5], -2),
-                    self.polar_kernel,
+                    self.north_pole_kernel if self.independent_north_pole else self.polar_kernel,
                     strides=self.strides,
                     padding=self.padding,
                     data_format=self.data_format,
@@ -896,7 +914,7 @@ class CubeSphereConv2D(Layer):
             outputs.append(
                 K.conv2d(
                     inputs[..., 5],
-                    self.polar_kernel,
+                    self.north_pole_kernel if self.independent_north_pole else self.polar_kernel,
                     strides=self.strides,
                     padding=self.padding,
                     data_format=self.data_format,
@@ -906,7 +924,7 @@ class CubeSphereConv2D(Layer):
         if self.use_bias:
             outputs[5] = K.bias_add(
                 outputs[5],
-                self.polar_bias,
+                self.north_pole_bias if self.independent_north_pole else self.polar_bias,
                 data_format=self.data_format
             )
         if self.flip_north_pole:
@@ -956,6 +974,7 @@ class CubeSphereConv2D(Layer):
             'activation': activations.serialize(self.activation),
             'use_bias': self.use_bias,
             'flip_north_pole': self.flip_north_pole,
+            'independent_north_pole': self.independent_north_pole,
             'kernel_initializer': initializers.serialize(self.kernel_initializer),
             'bias_initializer': initializers.serialize(self.bias_initializer),
             'kernel_regularizer': regularizers.serialize(self.kernel_regularizer),

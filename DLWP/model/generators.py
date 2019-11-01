@@ -438,8 +438,8 @@ class SeriesDataGenerator(Sequence):
         self._interval = interval
 
         # Temporarily set DataArrays for coordinates
-        self.input_da = self.da.sel(**self._input_sel)
-        self.output_da = self.da.sel(**self._output_sel)
+        self.input_da = self.da.isel(sample=[0]).sel(**self._input_sel)
+        self.output_da = self.da.isel(sample=[0]).sel(**self._output_sel)
         if not delay_load:
             self._load_data()
 

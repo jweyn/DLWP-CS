@@ -76,7 +76,9 @@ pressure_variable_names = {
     'u_component_of_wind': 'u',
     'v_component_of_wind': 'v',
     'vertical_velocity': 'w',
-    'vorticity': 'vo'
+    'vorticity': 'vo',
+    'streamfunction': 'sf',
+    'velocity_potential': 'vp'
 }
 surface_variable_names = {
     '10m_u_component_of_wind': 'u10',

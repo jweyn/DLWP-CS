@@ -111,14 +111,14 @@ use_keras_fit = False
 # Validation set to use. Either an integer (number of validation samples, taken from the end), or an iterable of
 # pandas datetime objects. The train set can be set to the first <integer> samples, an iterable of dates, or None to
 # simply use the remaining points. Match the type of validation_set.
-validation_set = list(pd.date_range(datetime(2013, 1, 1, 0), datetime(2016, 12, 31, 18), freq='3H'))
-train_set = list(pd.date_range(datetime(1979, 1, 1, 6), datetime(2012, 12, 31, 18), freq='3H'))
+validation_set = list(pd.date_range(datetime(2013, 1, 1, 0), datetime(2016, 12, 31, 18), freq='6H'))
+train_set = list(pd.date_range(datetime(1979, 1, 1, 6), datetime(2012, 12, 31, 18), freq='6H'))
 
 
 #%% Open data
 
 if args.temp_dir != 'None':
-    new_predictor_file = os.path.join(args.temp_dir, args.predictor_file)
+    new_predictor_file = os.path.join(args.temp_dir, args.predictor_file.split(os.sep)[-1])
     print('Copying predictor file to %s...' % new_predictor_file)
     if os.path.isfile(new_predictor_file):
         print('File already exists!')

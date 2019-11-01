@@ -16,6 +16,7 @@ import os
 from datetime import datetime
 
 from DLWP.model import SeriesDataGenerator, TimeSeriesEstimator
+from DLWP.model.preprocessing import get_constants
 from DLWP.util import load_model, train_test_split_ind
 from DLWP.model import verify
 from DLWP.remap import CubeSphereRemap
@@ -27,34 +28,36 @@ from DLWP.remap import CubeSphereRemap
 # with the conversion to the face coordinate. The scale file contains 'mean' and 'std' variables to perform inverse
 # scaling back to real data units.
 root_directory = '/home/disk/wave2/jweyn/Data/DLWP'
-predictor_file = '%s/cfs_6h_CS48_1979-2010_z3-5-7-10_tau_sfc.nc' % root_directory
-scale_file = '%s/cfs_6h_1979-2010_z3-5-7-10_tau_sfc.nc' % root_directory
+predictor_file = '%s/era5_2deg_3h_CS_1979-2018_z-tau-t2_500-1000.nc' % root_directory
+scale_file = '%s/era5_2deg_3h_1979-2018_z-tau-t2_500-1000.nc' % root_directory
 
 # If True, reverse the latitude coordinate in the predicted output
-reverse_lat = True
+reverse_lat = False
 
 # Map files for cubed sphere remapping
-map_files = ('/home/disk/brume/jweyn/Documents/DLWP/map_LL73x144_CS48.nc',
-             '/home/disk/brume/jweyn/Documents/DLWP/map_CS48_LL73x144.nc')
+map_files = ('/home/disk/brume/jweyn/Documents/DLWP/map_LL91x180_CS48.nc',
+             '/home/disk/brume/jweyn/Documents/DLWP/map_CS48_LL91x180.nc')
 
 # Names of model files, located in the root_directory, and labels for those models
-model = 'dlwp_6h_CS48_surf1000_T2_UNET'
-model_label = r'$\tau$-SOL-surf-1000 CS 48 UNET T2 leaky avg'
+model = 'dlwp_era5_6h_CS48_tau-sfc1000-lsm_UNET'
+model_label = 'ERA-6h tau z1000 t2 SOL LSM UNET'
+
+constant_fields = [(os.path.join(root_directory, 'era5_2deg_3h_CS_land_sea_mask.nc'), 'lsm')]
 
 # Optional list of selections to make from the predictor dataset for each model. This is useful if, for example,
 # you want to examine models that have different numbers of vertical levels but one predictor dataset contains
 # the data that all models need. Separate input and output selections are available for models using different inputs
 # and outputs. Also specify the number of input/output time steps in each model.
-input_selection = {'varlev': ['HGT/500', 'THICK/300-700', 'HGT/1000', 'TMP2/0']}
-output_selection = {'varlev': ['HGT/500', 'THICK/300-700', 'HGT/1000', 'TMP2/0']}
+input_selection = {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0']}
+output_selection = {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0']}
 add_insolation = True
 input_time_steps = 2
 output_time_steps = 2
 
 # Validation set to use. Either an integer (number of validation samples, taken from the end), or an iterable of
 # pandas datetime objects.
-start_date = datetime(2003, 1, 1, 0)
-end_date = datetime(2003, 12, 31, 18)
+start_date = datetime(2013, 1, 1, 0)
+end_date = datetime(2013, 12, 31, 18)
 validation_set = pd.date_range(start_date, end_date, freq='6H')
 # validation_set = [d for d in validation_set if d.month in [6, 7, 8]]
 validation_set = np.array(validation_set, dtype='datetime64[ns]')
@@ -64,7 +67,7 @@ num_forecast_hours = 28 * 24
 dt = 6
 
 # Scale the variables to original units
-scale_variables = True
+scale_variables = False
 
 
 #%% Pre-processing
@@ -82,8 +85,9 @@ else:  # we must have a list of datetimes
     predictor_ds = all_ds.sel(sample=validation_set)
 
 # Fix negative latitude for solar radiation input
-predictor_ds.lat.load()
-predictor_ds.lat[:] = -1. * predictor_ds.lat.values
+if reverse_lat:
+    predictor_ds.lat.load()
+    predictor_ds.lat[:] = -1. * predictor_ds.lat.values
 
 
 #%% Load model and data
@@ -101,11 +105,12 @@ if os.path.isfile(forecast_file):
 
 else:
     # Create data generator
+    constants = get_constants(constant_fields)
     sequence = dlwp._n_steps if hasattr(dlwp, '_n_steps') and dlwp._n_steps > 1 else None
     val_generator = SeriesDataGenerator(dlwp, predictor_ds, rank=3, add_insolation=add_insolation,
                                         input_sel=input_selection, output_sel=output_selection,
-                                        input_time_steps=input_time_steps,
-                                        output_time_steps=output_time_steps,
+                                        input_time_steps=input_time_steps, output_time_steps=output_time_steps,
+                                        constants=constants,
                                         sequence=sequence, batch_size=64, load=False)
 
     estimator = TimeSeriesEstimator(dlwp, val_generator)
