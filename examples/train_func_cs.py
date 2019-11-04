@@ -31,22 +31,22 @@ import keras.backend as K
 
 # File paths and names
 root_directory = '/home/disk/wave2/jweyn/Data/DLWP'
-predictor_file = os.path.join(root_directory, 'era5_2deg_3h_CS_1979-2018_z-tau-t2_500-1000.nc')
-model_file = os.path.join(root_directory, 'dlwp_era5_3h_CS48_tau-sfc1000_UNET')
-log_directory = os.path.join(root_directory, 'logs', 'era5_3h_CS48_tau-sfc1000_UNET')
+predictor_file = os.path.join(root_directory, 'era5_2deg_3h_CS_1979-2018_z-tau-t2_500-1000_tcwv.nc')
+model_file = os.path.join(root_directory, 'dlwp_era5_6h-3_CS48_tau-sfc1000-tcwv-lsm-topo_UNET')
+log_directory = os.path.join(root_directory, 'logs', 'era5_6h-3_CS48_tau-sfc1000-tcwv-lsm-topo_UNET')
 reverse_lat = False
 
 # Optional paths to files containing constant fields to add to the inputs
 constant_fields = [
-    # (os.path.join(root_directory, 'era5_2deg_3h_CS_land_sea_mask.nc'), 'lsm'),
-    # (os.path.join(root_directory, 'era5_2deg_3h_CS_scaled_topo.nc'), 'z')
+    (os.path.join(root_directory, 'era5_2deg_3h_CS_land_sea_mask.nc'), 'lsm'),
+    (os.path.join(root_directory, 'era5_2deg_3h_CS_scaled_topo.nc'), 'z')
 ]
 
 # NN parameters. Regularization is applied to LSTM layers by default. weight_loss indicates whether to weight the
 # loss function preferentially in the mid-latitudes.
 model_is_convolutional = True
 min_epochs = 50
-max_epochs = 100
+max_epochs = 200
 patience = 20
 batch_size = 64
 lambda_ = 1.e-4
@@ -57,10 +57,12 @@ skip_connections = True
 # Data parameters. Specify the input/output variables/levels and input/output time steps. DLWPFunctional requires that
 # the inputs and outputs match exactly (for now). Ensure that the selections use LISTS of values (even for only 1) to
 # keep dimensions correct. The number of output iterations to train on is given by integration_steps. The actual number
-# of forecast steps (units of model delta t) is io_time_steps * integration_steps.
-io_selection = {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0']}
+# of forecast steps (units of model delta t) is io_time_steps * integration_steps. The parameter data_interval
+# governs what the effective delta t is; it is a multiplier for the resolution of the data file.
+io_selection = {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0', 'tcwv/0']}
 io_time_steps = 2
 integration_steps = 2
+data_interval = 1
 # Add incoming solar radiation forcing
 add_solar = True
 
@@ -78,8 +80,8 @@ use_keras_fit = False
 # Validation set to use. Either an integer (number of validation samples, taken from the end), or an iterable of
 # pandas datetime objects. The train set can be set to the first <integer> samples, an iterable of dates, or None to
 # simply use the remaining points. Match the type of validation_set.
-validation_set = list(pd.date_range(datetime(2013, 1, 1, 0), datetime(2016, 12, 31, 18), freq='3H'))
-train_set = list(pd.date_range(datetime(1979, 1, 1, 6), datetime(2012, 12, 31, 18), freq='3H'))
+validation_set = list(pd.date_range(datetime(2013, 1, 1, 0), datetime(2016, 12, 31, 18), freq='6H'))
+train_set = list(pd.date_range(datetime(1979, 1, 1, 0), datetime(2012, 12, 31, 18), freq='6H'))
 
 
 #%% Open data
@@ -129,7 +131,7 @@ else:  # we must have a list of datetimes
 # Build the data generators
 generator = SeriesDataGenerator(dlwp, train_data, rank=3, input_sel=io_selection, output_sel=io_selection,
                                 input_time_steps=io_time_steps, output_time_steps=io_time_steps,
-                                sequence=integration_steps, add_insolation=add_solar,
+                                sequence=integration_steps, interval=data_interval, add_insolation=add_solar,
                                 batch_size=batch_size, load=load_memory, shuffle=shuffle,
                                 delay_load=False, constants=constants)
 if use_keras_fit:
@@ -138,7 +140,7 @@ if validation_data is not None:
     print('Loading validation data to memory...')
     val_generator = SeriesDataGenerator(dlwp, validation_data, input_sel=io_selection, output_sel=io_selection,
                                         rank=3, input_time_steps=io_time_steps, output_time_steps=io_time_steps,
-                                        sequence=integration_steps, add_insolation=add_solar,
+                                        sequence=integration_steps, interval=data_interval, add_insolation=add_solar,
                                         batch_size=batch_size, load='minimal',
                                         delay_load=False, constants=constants)
     if use_keras_fit:

@@ -506,10 +506,14 @@ class Preprocessor(object):
         # Get the exact dataset we want (index times, variables, and levels)
         all_dates = self.raw_data.dataset_dates
         sel_levels = []
-        for l in levels:
-            if float(l) in self.raw_data.Dataset.level:
-                sel_levels.append(l)
-        ds = self.raw_data.Dataset.sel(time=all_dates, level=list(set(sel_levels)))
+        ds = self.raw_data.Dataset.sel(time=all_dates)
+        try:
+            for l in levels:
+                if float(l) in self.raw_data.Dataset.level:
+                    sel_levels.append(l)
+            ds = ds.sel(level=list(set(sel_levels)))
+        except AttributeError:
+            pass
         if verbose:
             print('Preprocessor.data_to_samples: opening and formatting raw data')
         for v in vars_available:

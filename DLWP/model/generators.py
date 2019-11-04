@@ -349,8 +349,8 @@ class SeriesDataGenerator(Sequence):
             Note that in this mode, if add_insolation is True, the inputs are also a list of consecutive forecast steps,
             with the first step containing all of the input data and subsequent steps containing only the requisite
             insolation fields.
-        :param interval: int: the number of steps to take when producing target data. For example, if interval is 2 and
-            the spacing between time steps is 6 h, the target will be 12 hours in the future.
+        :param interval: int: the number of steps to take between data samples and within input/output time steps.
+            Effectively it is the model delta t multiplier for the data resolution.
         :param add_insolation: bool or str:
             if False: do not add incoming solar radiation
             if True: add insolation to the inputs. Incompatible with 3-d convolutions.
@@ -410,9 +410,9 @@ class SeriesDataGenerator(Sequence):
         self._indices = []
         self._sequence = sequence
         if self._sequence is not None:
-            self._n_sample = ds.dims['sample'] - input_time_steps - output_time_steps * sequence + 2 - interval
+            self._n_sample = ds.dims['sample'] - interval * (input_time_steps + output_time_steps * sequence) + 1
         else:
-            self._n_sample = ds.dims['sample'] - input_time_steps - output_time_steps + 2 - interval
+            self._n_sample = ds.dims['sample'] - interval * (input_time_steps + output_time_steps) + 1
         if 'time_step' in ds.dims:
             # Use -1 index because Preprocessor.data_to_samples (which generates a 'time_step' dim), assigns the
             # datetime 'sample' dim based on the initialization time, time_step=-1
@@ -437,7 +437,7 @@ class SeriesDataGenerator(Sequence):
         self._output_time_steps = output_time_steps
         self._interval = interval
 
-        # Temporarily set DataArrays for coordinates
+        # Temporarily set DataArrays for coordinates, overwritten when data are loaded
         self.input_da = self.da.isel(sample=[0]).sel(**self._input_sel)
         self.output_da = self.da.isel(sample=[0]).sel(**self._output_sel)
         if not delay_load:
@@ -621,8 +621,8 @@ class SeriesDataGenerator(Sequence):
             self._load_data()
 
         # Predictors
-        p = np.concatenate([self.input_da.values[samples + n, np.newaxis] for n in range(self._input_time_steps)],
-                           axis=1)
+        p = np.concatenate([self.input_da.values[samples + n * self._interval, np.newaxis]
+                            for n in range(self._input_time_steps)], axis=1)
         if self._add_insolation:
             # Pretend like we have no insolation and keep the time axis
             self._add_insolation = False
@@ -635,13 +635,15 @@ class SeriesDataGenerator(Sequence):
             if self._sequence is not None:
                 for s in range(self._sequence):
                     insol.append(
-                        np.concatenate([self.insolation_da.values[samples + self._input_time_steps * s + n,
-                                                                  np.newaxis, np.newaxis]
-                                        for n in range(self._input_time_steps)], axis=1)
+                        np.concatenate(
+                            [self.insolation_da.values[samples + self._interval * (self._input_time_steps * s + n),
+                                                       np.newaxis, np.newaxis] for n in range(self._input_time_steps)],
+                            axis=1
+                        )
                     )
             else:
                 insol.append(
-                    np.concatenate([self.insolation_da.values[samples + n, np.newaxis, np.newaxis]
+                    np.concatenate([self.insolation_da.values[samples + n * self._interval, np.newaxis, np.newaxis]
                                     for n in range(self._input_time_steps)], axis=1)
                 )
             p = p.reshape((n_sample,) + shape)
@@ -652,9 +654,12 @@ class SeriesDataGenerator(Sequence):
         if self._sequence is not None:
             targets = []
             for s in range(self._sequence):
-                t = np.concatenate([self.output_da.values[samples + self._input_time_steps + self._interval - 1 +
-                                                          self._output_time_steps * s + n, np.newaxis]
-                                    for n in range(self._output_time_steps)], axis=1)
+                t = np.concatenate(
+                    [self.output_da.values[samples + self._interval * (
+                            self._input_time_steps + self._output_time_steps * s + n), np.newaxis]
+                     for n in range(self._output_time_steps)],
+                    axis=1
+                )
 
                 t = t.reshape((n_sample, -1))
 
@@ -680,8 +685,8 @@ class SeriesDataGenerator(Sequence):
             if self._add_insolation:
                 p = [p] + insol[1:]
         else:
-            t = np.concatenate([self.output_da.values[samples + self._input_time_steps + n +
-                                                      self._interval - 1, np.newaxis]
+            t = np.concatenate([self.output_da.values[samples + self._interval * (self._input_time_steps + n),
+                                                      np.newaxis]
                                 for n in range(self._output_time_steps)], axis=1)
 
             t = t.reshape((n_sample, -1))

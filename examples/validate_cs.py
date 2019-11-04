@@ -36,7 +36,7 @@ from DLWP.remap import CubeSphereRemap
 root_directory = '/home/disk/wave2/jweyn/Data/DLWP'
 # predictor_file = '%s/cfs_6h_CS48_1979-2010_z3-5-7-10_tau_sfc.nc' % root_directory
 # scale_file = '%s/cfs_6h_1979-2010_z3-5-7-10_tau_sfc.nc' % root_directory
-predictor_file = '%s/era5_2deg_3h_CS_1979-2018_z-tau-t2_500-1000.nc' % root_directory
+predictor_file = '%s/era5_2deg_3h_CS_1979-2018_z-tau-t2_500-1000_u-200-850_chi200.nc' % root_directory
 scale_file = '%s/era5_2deg_3h_1979-2018_z-tau-t2_500-1000.nc' % root_directory
 
 # The remap file contains the verification data passed through the same remapping scheme as the predictors. That is,
@@ -59,16 +59,20 @@ map_files = ('/home/disk/brume/jweyn/Documents/DLWP/map_LL91x180_CS48.nc',
 #     '3-variable 4-level 2m-T UNET'
 # ]
 models = [
-    'dlwp_era5_3h_CS48_tau-sol_UNET',
+    # 'dlwp_era5_3h_CS48_tau-sol_UNET',
     'dlwp_era5_6h_CS48_tau-sol_UNET',
-    'dlwp_era5_3h_CS48_tau-sfc1000_UNET',
-    'dlwp_era5_3h_CS48_tau-sfc1000-lsm_UNET',
+    # 'dlwp_era5_3h_CS48_tau-sfc1000_UNET',
+    'dlwp_era5_6h_CS48_tau-sfc1000-lsm_UNET',
+    'dlwp_era5_6h_CS48_tau-sfc1000-lsm-topo_UNET',
+    'dlwp_era5_6h_CS48_tau-sfc1000-chi-lsm-topo_UNET'
 ]
 model_labels = [
-    'ERA-3h tau SOL UNET',
+    # 'ERA-3h tau SOL UNET',
     'ERA-6h tau SOL UNET',
-    'ERA-3h tau z1000 t2 SOL UNET',
-    'ERA-3h tau z1000 t2 SOL LSM UNET',
+    # 'ERA-3h tau z1000 t2 SOL UNET',
+    'ERA-6h tau z1000 t2 SOL LSM UNET',
+    'ERA-6h tau z1000 t2 SOL LSM TOPO UNET',
+    'ERA-6h tau z1000 t2 chi SOL LSM TOPO UNET'
 ]
 
 # Optional list of selections to make from the predictor dataset for each model. This is useful if, for example,
@@ -84,20 +88,30 @@ model_labels = [
 #     ]}
 # ]
 input_selection = output_selection = [
+    # {'varlev': ['z/500', 'tau/300-700']},
     {'varlev': ['z/500', 'tau/300-700']},
-    {'varlev': ['z/500', 'tau/300-700']},
+    # {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0']},
     {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0']},
     {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0']},
+    {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0', 'vp/200']},
 ]
 
 # Optional added constant inputs
 constant_fields = [
+    # None,
     None,
-    None,
-    None,
+    # None,
     [
         (os.path.join(root_directory, 'era5_2deg_3h_CS_land_sea_mask.nc'), 'lsm'),
     ],
+    [
+        (os.path.join(root_directory, 'era5_2deg_3h_CS_land_sea_mask.nc'), 'lsm'),
+        (os.path.join(root_directory, 'era5_2deg_3h_CS_scaled_topo.nc'), 'z')
+    ],
+    [
+        (os.path.join(root_directory, 'era5_2deg_3h_CS_land_sea_mask.nc'), 'lsm'),
+        (os.path.join(root_directory, 'era5_2deg_3h_CS_scaled_topo.nc'), 'z')
+    ]
 ]
 
 # Other required parameters
@@ -154,8 +168,8 @@ plot_spread = False
 plot_mean = False
 method = 'rmse'
 mse_title = r'$Z_{500}$; 2013; global'  # '20-70$^{\circ}$N'
-mse_file_name = 'rmse_tau-CS48-UNET_era-sfc-badsol.pdf'
-mse_pkl_file = 'rmse_tau-CS48-UNET_era-sfc-badsol.pkl'
+mse_file_name = 'rmse_tau-CS48-UNET_era-6h-sfc-topo-chi.pdf'
+mse_pkl_file = 'rmse_tau-CS48-UNET_era-6h-sfc-topo-chi.pkl'
 
 
 #%% Pre-processing
@@ -478,8 +492,8 @@ if plot_mse:
             plt.plot(f_hours[0], np.mean(np.array(mse[:len(models)]), axis=0), label='mean', linewidth=2.)
         plt.xlim([0, dt * num_forecast_steps])
         plt.xticks(np.arange(0, num_forecast_steps * dt + 1, 4 * dt))
-        plt.ylim([0, 200])
-        plt.yticks(np.arange(0, 201, 20))
+        plt.ylim([0, 2000])
+        plt.yticks(np.arange(0, 2001, 200))
         plt.legend(loc='best', fontsize=8)
         plt.grid(True, color='lightgray', zorder=-100)
         plt.xlabel('forecast hour')
