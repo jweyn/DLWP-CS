@@ -21,9 +21,9 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 from datetime import datetime
-from DLWP.model import DLWPFunctional, SeriesDataGenerator
-from DLWP.model.preprocessing import get_constants
-from DLWP.util import save_model, train_test_split_ind
+from DLWP.model import DLWPFunctional, ArrayDataGenerator
+from DLWP.model.preprocessing import get_constants, prepare_data_array
+from DLWP.util import save_model
 from keras.callbacks import History, TensorBoard
 from azureml.core import Run
 
@@ -71,8 +71,8 @@ reverse_lat = False
 
 # Optional paths to files containing constant fields to add to the inputs
 constant_fields = [
-    # (os.path.join(root_directory, 'era5_2deg_3h_CS_land_sea_mask.nc'), 'lsm'),
-    # (os.path.join(root_directory, 'era5_2deg_3h_CS_scaled_topo.nc'), 'z')
+    (os.path.join(root_directory, 'era5/era5_2deg_3h_CS_land_sea_mask.nc'), 'lsm'),
+    (os.path.join(root_directory, 'era5/era5_2deg_3h_CS_scaled_topo.nc'), 'z')
 ]
 
 # NN parameters. Regularization is applied to LSTM layers by default. weight_loss indicates whether to weight the
@@ -90,16 +90,14 @@ skip_connections = True
 # Data parameters. Specify the input/output variables/levels and input/output time steps. DLWPFunctional requires that
 # the inputs and outputs match exactly (for now). Ensure that the selections use LISTS of values (even for only 1) to
 # keep dimensions correct. The number of output iterations to train on is given by integration_steps. The actual number
-# of forecast steps (units of model delta t) is io_time_steps * integration_steps.
+# of forecast steps (units of model delta t) is io_time_steps * integration_steps. The parameter data_interval
+# governs what the effective delta t is; it is a multiplier for the temporal resolution of the data file.
 io_selection = {'varlev': ['z/500', 'tau/300-700']}
 io_time_steps = 2
 integration_steps = 2
+data_interval = 1
 # Add incoming solar radiation forcing
 add_solar = True
-
-# If system memory permits, loading the predictor data can greatly increase efficiency when training on GPUs, if the
-# train computation takes less time than the data loading.
-load_memory = 'minimal'
 
 # Use multiple GPUs, if available
 n_gpu = 2
@@ -128,16 +126,9 @@ if args.temp_dir != 'None':
 else:
     data = xr.open_dataset(predictor_file, chunks={'sample': 1})
 
-# Fix negative latitude for solar radiation input
 if reverse_lat:
     data.lat.load()
     data.lat[:] = -1. * data.lat.values
-
-if 'time_step' in data.dims:
-    time_dim = data.dims['time_step']
-else:
-    time_dim = 1
-n_sample = data.dims['sample']
 
 has_constants = not(not constant_fields)
 constants = get_constants(constant_fields or None)
@@ -148,42 +139,30 @@ constants = get_constants(constant_fields or None)
 dlwp = DLWPFunctional(is_convolutional=model_is_convolutional, is_recurrent=False, time_dim=io_time_steps)
 
 # Find the validation set
-if isinstance(validation_set, int):
-    n_sample = data.dims['sample']
-    ts, val_set = train_test_split_ind(n_sample, validation_set, method='last')
-    if train_set is None:
-        train_set = ts
-    elif isinstance(train_set, int):
-        train_set = list(range(train_set))
-    validation_data = data.isel(sample=val_set)
-    train_data = data.isel(sample=train_set)
-elif validation_set is None:
-    if train_set is None:
-        train_set = data.sample.values
-    validation_data = None
-    train_data = data.sel(sample=train_set)
-else:  # we must have a list of datetimes
-    if train_set is None:
-        train_set = np.isin(data.sample.values, np.array(validation_set, dtype='datetime64[ns]'),
-                            assume_unique=True, invert=True)
-    validation_data = data.sel(sample=validation_set)
-    train_data = data.sel(sample=train_set)
+if train_set is None:
+    train_set = np.isin(data.sample.values, np.array(validation_set, dtype='datetime64[ns]'),
+                        assume_unique=True, invert=True)
+validation_data = data.sel(sample=validation_set)
+train_data = data.sel(sample=train_set)
 
 # Build the data generators
-generator = SeriesDataGenerator(dlwp, train_data, rank=3, input_sel=io_selection, output_sel=io_selection,
-                                input_time_steps=io_time_steps, output_time_steps=io_time_steps,
-                                sequence=integration_steps, add_insolation=add_solar,
-                                batch_size=batch_size, load=load_memory, shuffle=shuffle,
-                                delay_load=False, constants=constants)
+print('Loading data to memory...')
+train_array, input_ind, output_ind, sol = prepare_data_array(train_data, input_sel=io_selection,
+                                                             output_sel=io_selection, add_insolation=add_solar)
+generator = ArrayDataGenerator(dlwp, train_array, rank=3, input_slice=input_ind, output_slice=output_ind,
+                               input_time_steps=io_time_steps, output_time_steps=io_time_steps,
+                               sequence=integration_steps, interval=data_interval, insolation_array=sol,
+                               batch_size=batch_size, shuffle=shuffle, constants=constants)
 if use_keras_fit:
     p_train, t_train = generator.generate([])
 if validation_data is not None:
     print('Loading validation data to memory...')
-    val_generator = SeriesDataGenerator(dlwp, validation_data, input_sel=io_selection, output_sel=io_selection,
-                                        rank=3, input_time_steps=io_time_steps, output_time_steps=io_time_steps,
-                                        sequence=integration_steps, add_insolation=add_solar,
-                                        batch_size=batch_size, load='minimal',
-                                        delay_load=False, constants=constants)
+    val_array, input_ind, output_ind, sol = prepare_data_array(validation_data, input_sel=io_selection,
+                                                               output_sel=io_selection, add_insolation=add_solar)
+    val_generator = ArrayDataGenerator(dlwp, val_array, rank=3, input_slice=input_ind, output_slice=output_ind,
+                                       input_time_steps=io_time_steps, output_time_steps=io_time_steps,
+                                       sequence=integration_steps, interval=data_interval, insolation_array=sol,
+                                       batch_size=batch_size, shuffle=shuffle, constants=constants)
     if use_keras_fit:
         val = val_generator.generate([])
 else:
@@ -410,7 +389,7 @@ if use_keras_fit:
              callbacks=[history, RNNResetStates(), early])
 else:
     dlwp.fit_generator(generator, epochs=max_epochs + 1, verbose=2, validation_data=val_generator,
-                       use_multiprocessing=False, callbacks=[history, RNNResetStates(), early])
+                       use_multiprocessing=True, callbacks=[history, RNNResetStates(), early])
 end_time = time.time()
 
 # Save the model

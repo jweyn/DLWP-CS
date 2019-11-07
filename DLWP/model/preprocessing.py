@@ -14,6 +14,7 @@ import xarray as xr
 import os
 import warnings
 from datetime import datetime
+from ..util import to_bool, insolation
 
 # netCDF fill value
 fill_value = np.array(nc.default_fillvals['f4']).astype(np.float32)
@@ -897,3 +898,77 @@ def get_constants(constants=None, **kwargs):
     result = np.stack(result, axis=0)
 
     return result
+
+
+def prepare_data_array(ds, input_sel=None, output_sel=None, add_insolation=False, return_data=True):
+    """
+    Prepare an array of predictor or
+    :param ds:
+    :param input_sel:
+    :param output_sel:
+    :param add_insolation:
+    :param return_data:
+    :return:
+    """
+    input_sel = input_sel or {}
+    output_sel = output_sel or {}
+    try:
+        add_insolation = to_bool(add_insolation)
+    except ValueError:
+        pass
+    assert isinstance(add_insolation, (bool, str))
+    if isinstance(add_insolation, str):
+        assert add_insolation in ['hourly', 'daily']
+    daily_insolation = str(add_insolation) == 'daily'
+
+    if 'time_step' in ds.dims:
+        # Use -1 index because Preprocessor.data_to_samples (which generates a 'time_step' dim), assigns the
+        # datetime 'sample' dim based on the initialization time, time_step=-1
+        da = ds.predictors.isel(time_step=-1)
+    else:
+        da = ds.predictors
+
+    # Check the selections for empty selections
+    if len(input_sel) == 0:
+        if 'varlev' in ds.variables.keys():
+            input_sel = {'varlev': ds['varlev'].values}
+        else:
+            input_sel = {'variable': ds['variable'].values, 'level': ds['level'].values}
+    output_sel = output_sel or {}
+    if len(output_sel) == 0:
+        if 'varlev' in ds.variables.keys():
+            output_sel = {'varlev': ds['varlev'].values}
+        else:
+            output_sel = {'variable': ds['variable'].values, 'level': ds['level'].values}
+
+    # Try to transpose the axes so we can use basic indexing to return views
+    if 'varlev' in input_sel.keys():
+        union = [s for s in input_sel['varlev'] if s in output_sel['varlev']]
+        added_in = [s for s in input_sel['varlev'] if s not in union]
+        added_out = [s for s in output_sel['varlev'] if s not in union]
+        if not return_data or (len(added_in) > 0 and len(added_out) > 0):
+            if not return_data:
+                warnings.warn("To avoid returning values inconsistent with the input data, will not reduce indices "
+                              "to basic indexing.")
+            else:
+                warnings.warn("Found extra variables in both input and output, could not reduce to basic indexing.")
+            input_ind = [int(np.where(ds['varlev'] == v)[0]) for v in input_sel['varlev']]
+            output_ind = [int(np.where(ds['varlev'] == v)[0]) for v in output_sel['varlev']]
+        else:
+            da = da.sel(varlev=union + added_in + added_out)
+            input_ind = slice(0, len(union) + len(added_in))
+            output_ind = slice(0, len(union) + len(added_out))
+    else:
+        raise NotImplementedError("prepare_data_array is not ready for use with variable/level coordinates.")
+
+    # Pre-generate the insolation data
+    if add_insolation:
+        sol = insolation(da.sample.values, ds.lat.values, ds.lon.values, daily=daily_insolation)
+    else:
+        sol = None
+
+    # Return the data if requested
+    if return_data:
+        return da.values, input_ind, output_ind, sol
+    else:
+        return input_ind, output_ind, sol

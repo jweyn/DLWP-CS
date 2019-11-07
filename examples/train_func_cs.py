@@ -14,9 +14,9 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 from datetime import datetime
-from DLWP.model import DLWPFunctional, SeriesDataGenerator
-from DLWP.model.preprocessing import get_constants
-from DLWP.util import save_model, train_test_split_ind
+from DLWP.model import DLWPFunctional, ArrayDataGenerator
+from DLWP.model.preprocessing import get_constants, prepare_data_array
+from DLWP.util import save_model
 from keras.callbacks import History, TensorBoard
 
 from keras.layers import Input, MaxPooling3D, UpSampling3D, AveragePooling3D, concatenate, ReLU, Reshape, Concatenate
@@ -58,7 +58,7 @@ skip_connections = True
 # the inputs and outputs match exactly (for now). Ensure that the selections use LISTS of values (even for only 1) to
 # keep dimensions correct. The number of output iterations to train on is given by integration_steps. The actual number
 # of forecast steps (units of model delta t) is io_time_steps * integration_steps. The parameter data_interval
-# governs what the effective delta t is; it is a multiplier for the resolution of the data file.
+# governs what the effective delta t is; it is a multiplier for the temporal resolution of the data file.
 io_selection = {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0', 'tcwv/0']}
 io_time_steps = 2
 integration_steps = 2
@@ -92,12 +92,6 @@ if reverse_lat:
     data.lat.load()
     data.lat[:] = -1. * data.lat.values
 
-if 'time_step' in data.dims:
-    time_dim = data.dims['time_step']
-else:
-    time_dim = 1
-n_sample = data.dims['sample']
-
 has_constants = not(not constant_fields)
 constants = get_constants(constant_fields or None)
 
@@ -107,42 +101,30 @@ constants = get_constants(constant_fields or None)
 dlwp = DLWPFunctional(is_convolutional=model_is_convolutional, is_recurrent=False, time_dim=io_time_steps)
 
 # Find the validation set
-if isinstance(validation_set, int):
-    n_sample = data.dims['sample']
-    ts, val_set = train_test_split_ind(n_sample, validation_set, method='last')
-    if train_set is None:
-        train_set = ts
-    elif isinstance(train_set, int):
-        train_set = list(range(train_set))
-    validation_data = data.isel(sample=val_set)
-    train_data = data.isel(sample=train_set)
-elif validation_set is None:
-    if train_set is None:
-        train_set = data.sample.values
-    validation_data = None
-    train_data = data.sel(sample=train_set)
-else:  # we must have a list of datetimes
-    if train_set is None:
-        train_set = np.isin(data.sample.values, np.array(validation_set, dtype='datetime64[ns]'),
-                            assume_unique=True, invert=True)
-    validation_data = data.sel(sample=validation_set)
-    train_data = data.sel(sample=train_set)
+if train_set is None:
+    train_set = np.isin(data.sample.values, np.array(validation_set, dtype='datetime64[ns]'),
+                        assume_unique=True, invert=True)
+validation_data = data.sel(sample=validation_set)
+train_data = data.sel(sample=train_set)
 
 # Build the data generators
-generator = SeriesDataGenerator(dlwp, train_data, rank=3, input_sel=io_selection, output_sel=io_selection,
-                                input_time_steps=io_time_steps, output_time_steps=io_time_steps,
-                                sequence=integration_steps, interval=data_interval, add_insolation=add_solar,
-                                batch_size=batch_size, load=load_memory, shuffle=shuffle,
-                                delay_load=False, constants=constants)
+print('Loading data to memory...')
+train_array, input_ind, output_ind, sol = prepare_data_array(train_data, input_sel=io_selection,
+                                                             output_sel=io_selection, add_insolation=add_solar)
+generator = ArrayDataGenerator(dlwp, train_array, rank=3, input_slice=input_ind, output_slice=output_ind,
+                               input_time_steps=io_time_steps, output_time_steps=io_time_steps,
+                               sequence=integration_steps, interval=data_interval, insolation_array=sol,
+                               batch_size=batch_size, shuffle=shuffle, constants=constants)
 if use_keras_fit:
     p_train, t_train = generator.generate([])
 if validation_data is not None:
     print('Loading validation data to memory...')
-    val_generator = SeriesDataGenerator(dlwp, validation_data, input_sel=io_selection, output_sel=io_selection,
-                                        rank=3, input_time_steps=io_time_steps, output_time_steps=io_time_steps,
-                                        sequence=integration_steps, interval=data_interval, add_insolation=add_solar,
-                                        batch_size=batch_size, load='minimal',
-                                        delay_load=False, constants=constants)
+    val_array, input_ind, output_ind, sol = prepare_data_array(validation_data, input_sel=io_selection,
+                                                               output_sel=io_selection, add_insolation=add_solar)
+    val_generator = ArrayDataGenerator(dlwp, val_array, rank=3, input_slice=input_ind, output_slice=output_ind,
+                                       input_time_steps=io_time_steps, output_time_steps=io_time_steps,
+                                       sequence=integration_steps, interval=data_interval, insolation_array=sol,
+                                       batch_size=batch_size, shuffle=shuffle, constants=constants)
     if use_keras_fit:
         val = val_generator.generate([])
 else:
@@ -172,55 +154,48 @@ conv_2d_1 = CubeSphereConv2D(32, 3, **{
         'dilation_rate': 1,
         'padding': 'valid',
         'activation': 'linear',
-        'data_format': 'channels_first',
-        # 'kernel_regularizer': l2(lambda_)
+        'data_format': 'channels_first'
     })
 # batch_norm_1 = BatchNormalization(axis=1)
 conv_2d_1_2 = CubeSphereConv2D(32, 3, **{
         'dilation_rate': 1,
         'padding': 'valid',
         'activation': 'linear',
-        'data_format': 'channels_first',
-        # 'kernel_regularizer': l2(lambda_)
+        'data_format': 'channels_first'
     })
 conv_2d_2 = CubeSphereConv2D(64, 3, **{
         'dilation_rate': 1,
         'padding': 'valid',
         'activation': 'linear',
-        'data_format': 'channels_first',
-        # 'kernel_regularizer': l2(3. * lambda_)
+        'data_format': 'channels_first'
     })
 # batch_norm_2 = BatchNormalization(axis=1)
 conv_2d_3 = CubeSphereConv2D(64 if skip_connections else 128, 3, **{
         'dilation_rate': 1,
         'padding': 'valid',
         'activation': 'linear',
-        'data_format': 'channels_first',
-        # 'kernel_regularizer': l2(lambda_)
+        'data_format': 'channels_first'
     })
 # batch_norm_3 = BatchNormalization(axis=1)
 conv_2d_4 = CubeSphereConv2D(32 if skip_connections else 64, 3, **{
         'dilation_rate': 1,
         'padding': 'valid',
         'activation': 'linear',
-        'data_format': 'channels_first',
-        # 'kernel_regularizer': l2(3. * lambda_)
+        'data_format': 'channels_first'
     })
 # batch_norm_4 = BatchNormalization(axis=1)
 conv_2d_5 = CubeSphereConv2D(32, 3, **{
         'dilation_rate': 1,
         'padding': 'valid',
         'activation': 'linear',
-        'data_format': 'channels_first',
-        # 'kernel_regularizer': l2(10. * lambda_)
+        'data_format': 'channels_first'
     })
 # batch_norm_5 = BatchNormalization(axis=1)
 conv_2d_5_2 = CubeSphereConv2D(32, 3, **{
         'dilation_rate': 1,
         'padding': 'valid',
         'activation': 'linear',
-        'data_format': 'channels_first',
-        # 'kernel_regularizer': l2(10. * lambda_)
+        'data_format': 'channels_first'
     })
 conv_2d_6 = CubeSphereConv2D(cso[0], 1, **{
         'padding': 'valid',
@@ -380,6 +355,6 @@ if model_file is not None:
 # Evaluate the model
 print("\nTrain time -- %s seconds --" % (end_time - start_time))
 if validation_data is not None:
-    score = dlwp.evaluate(*val_generator.generate([], scale_and_impute=False), verbose=0)
+    score = dlwp.evaluate(*val_generator.generate([]), verbose=0)
     print('Validation loss:', score[0])
     print('Validation mean absolute error:', score[1])
