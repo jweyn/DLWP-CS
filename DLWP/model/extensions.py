@@ -145,7 +145,7 @@ class TimeSeriesEstimator(object):
     def convolution_shape(self):
         return (self.generator._n_sample,) + self.generator.convolution_shape
 
-    def predict(self, steps, impute=False, keep_time_dim=False, prefer_first_times=True,
+    def predict(self, steps, samples=(), impute=False, keep_time_dim=False, prefer_first_times=True,
                 f_hour_timedelta_type=False, **kwargs):
         """
         Step forward the time series prediction from the model 'steps' times, feeding predictions back in as
@@ -157,6 +157,8 @@ class TimeSeriesEstimator(object):
         every step. Note only the SeriesDataGenerator supports variable inputs/outputs.
 
         :param steps: int: number of times to step forward
+        :param samples: list of int: which samples in the generator to predict for. For all samples, pass an empty
+            list or tuple. May cause unexpected behavior when the input and output data do not match.
         :param impute: bool: if True, use the mean state for missing inputs in the forward integration
         :param keep_time_dim: bool: if True, keep the time_step dimension instead of integrating it with forecsat_hour
             to produce a continuous time series
@@ -187,14 +189,15 @@ class TimeSeriesEstimator(object):
         effective_steps = int(np.ceil(steps / es))
 
         # Load data from the generator, without any scaling as this will be done by the model's predict method
-        predictors, t = self.generator.generate([], scale_and_impute=False)
+        predictors, t = self.generator.generate(samples, scale_and_impute=False)
         p = predictors[0] if isinstance(predictors, (list, tuple)) else predictors
         p_shape = tuple(p.shape)
 
         # Add metadata. The sample dimension denotes the *start* time of the sample, for insolation purposes. This is
         # then corrected when providing the final output time series.
         p = p.reshape((p_shape[0], self._input_time_steps, -1,) + self.generator.convolution_shape[-self.rank:])
-        sample_coord = self.generator.ds.sample[:self.generator._n_sample]
+        sample_coord = self.generator.ds.sample[:self.generator._n_sample] if len(samples) == 0 else \
+            self.generator.ds.sample[samples]
         if not self._is_series:
             sample_coord = sample_coord - self._dt * (self._input_time_steps - 1)
         p_da = xr.DataArray(
@@ -249,8 +252,8 @@ class TimeSeriesEstimator(object):
                                       for m in range(self.model._n_steps)]
 
                     predictors = [
-                        np.concatenate([result[:, s, -1].reshape(self.shape), new_insolation[0]],
-                                       axis=2).reshape(self.convolution_shape)
+                        np.concatenate([result[:, s, -1].reshape((-1,) + self.shape[1:]), new_insolation[0]],
+                                       axis=2).reshape((-1,) + self.convolution_shape[1:])
                     ] + new_insolation[1:]
 
                     # Add constants

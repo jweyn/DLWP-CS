@@ -31,6 +31,9 @@ except ImportError:
 # ==================================================================================================================== #
 
 class AdamLearningRateTracker(Callback):
+    """
+    Log the current learning rate used by and Adam optimizer.
+    """
     def on_epoch_end(self, epoch, logs=None, beta_1=0.9, beta_2=0.999,):
         optimizer = self.model.optimizer
         it = K.cast(optimizer.iterations, K.floatx())
@@ -43,6 +46,9 @@ class AdamLearningRateTracker(Callback):
 
 
 class SGDLearningRateTracker(Callback):
+    """
+    Log the current learning rate used by an SGD optimizer.
+    """
     def on_epoch_end(self, epoch, logs=None):
         optimizer = self.model.optimizer
         it = K.cast(optimizer.iterations, K.floatx())
@@ -53,6 +59,9 @@ class SGDLearningRateTracker(Callback):
 
 
 class BatchHistory(Callback):
+    """
+    Log training metrics for each batch of training data.
+    """
     def on_train_begin(self, logs=None):
         self.history = []
         self.epoch = 0
@@ -70,12 +79,13 @@ class BatchHistory(Callback):
 
 
 class RunHistory(Callback):
-    """Callback that records events into a `History` object.
-
+    """
+    Callback that records events into a `History` object.
     Adapted from keras.callbacks.History to include logging to Azure experiment runs.
     """
 
     def __init__(self, run):
+        super(RunHistory, self).__init__()
         self.epoch = []
         self.history = {}
         self.run = run
@@ -146,6 +156,28 @@ class EarlyStoppingMin(EarlyStopping):
                     print('Maximum epochs reached; restoring model weights from the end of '
                           'the best epoch')
                 self.model.set_weights(self.best_weights)
+
+
+class SaveWeightsOnEpoch(Callback):
+    """
+    Saves the model weights to a temporary file at the end of each epoch. This is useful for avoiding complete loss
+    of a run that fails for any reason.
+    """
+    def __init__(self, weights_file, interval=None):
+        """
+        :param weights_file: str: file name to save weights
+        """
+        super(SaveWeightsOnEpoch, self).__init__()
+        self.weights_file = str(weights_file)
+        if interval is not None:
+            assert isinstance(interval, int) and interval > 0, "'interval' must be an integer > 0"
+        self.interval = interval
+
+    def on_epoch_end(self, epoch, logs=None):
+        if self.interval is not None and epoch % self.interval == 0:
+            self.model.save_weights('%s.%s' % (self.weights_file, epoch))
+        else:
+            self.model.save_weights(self.weights_file)
 
 
 # ==================================================================================================================== #

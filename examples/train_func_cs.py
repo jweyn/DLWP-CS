@@ -20,11 +20,17 @@ from DLWP.util import save_model
 from keras.callbacks import History, TensorBoard
 
 from keras.layers import Input, MaxPooling3D, UpSampling3D, AveragePooling3D, concatenate, ReLU, Reshape, Concatenate
-from DLWP.custom import CubeSpherePadding2D, CubeSphereConv2D, RNNResetStates, EarlyStoppingMin, slice_layer
-
-from keras.regularizers import l2
+from DLWP.custom import CubeSpherePadding2D, CubeSphereConv2D, RNNResetStates, EarlyStoppingMin, SaveWeightsOnEpoch
 from keras.models import Model
 import keras.backend as K
+
+
+# Set a TF session with memory growth
+
+import tensorflow as tf
+config = tf.ConfigProto()
+config.gpu_options.allow_growth = True
+K.set_session(tf.Session(config=config))
 
 
 #%% Parameters
@@ -32,8 +38,8 @@ import keras.backend as K
 # File paths and names
 root_directory = '/home/disk/wave2/jweyn/Data/DLWP'
 predictor_file = os.path.join(root_directory, 'era5_2deg_3h_CS_1979-2018_z-tau-t2_500-1000_tcwv.nc')
-model_file = os.path.join(root_directory, 'dlwp_era5_6h-3_CS48_tau-sfc1000-tcwv-lsm-topo_UNET')
-log_directory = os.path.join(root_directory, 'logs', 'era5_6h-3_CS48_tau-sfc1000-tcwv-lsm-topo_UNET')
+model_file = os.path.join(root_directory, 'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2')
+log_directory = os.path.join(root_directory, 'logs', 'era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2')
 reverse_lat = False
 
 # Optional paths to files containing constant fields to add to the inputs
@@ -45,9 +51,9 @@ constant_fields = [
 # NN parameters. Regularization is applied to LSTM layers by default. weight_loss indicates whether to weight the
 # loss function preferentially in the mid-latitudes.
 model_is_convolutional = True
-min_epochs = 50
-max_epochs = 200
-patience = 20
+min_epochs = 100
+max_epochs = 1000
+patience = 50
 batch_size = 64
 lambda_ = 1.e-4
 loss_by_step = None
@@ -59,10 +65,10 @@ skip_connections = True
 # keep dimensions correct. The number of output iterations to train on is given by integration_steps. The actual number
 # of forecast steps (units of model delta t) is io_time_steps * integration_steps. The parameter data_interval
 # governs what the effective delta t is; it is a multiplier for the temporal resolution of the data file.
-io_selection = {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0', 'tcwv/0']}
+io_selection = {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0']}
 io_time_steps = 2
 integration_steps = 2
-data_interval = 1
+data_interval = 2
 # Add incoming solar radiation forcing
 add_solar = True
 
@@ -80,8 +86,8 @@ use_keras_fit = False
 # Validation set to use. Either an integer (number of validation samples, taken from the end), or an iterable of
 # pandas datetime objects. The train set can be set to the first <integer> samples, an iterable of dates, or None to
 # simply use the remaining points. Match the type of validation_set.
-validation_set = list(pd.date_range(datetime(2013, 1, 1, 0), datetime(2016, 12, 31, 18), freq='6H'))
-train_set = list(pd.date_range(datetime(1979, 1, 1, 0), datetime(2012, 12, 31, 18), freq='6H'))
+validation_set = list(pd.date_range(datetime(2013, 1, 1, 0), datetime(2016, 12, 31, 18), freq='3H'))
+train_set = list(pd.date_range(datetime(1979, 1, 1, 0), datetime(2012, 12, 31, 18), freq='3H'))
 
 
 #%% Open data
@@ -109,6 +115,7 @@ train_data = data.sel(sample=train_set)
 
 # Build the data generators
 print('Loading data to memory...')
+start_time = time.time()
 train_array, input_ind, output_ind, sol = prepare_data_array(train_data, input_sel=io_selection,
                                                              output_sel=io_selection, add_insolation=add_solar)
 generator = ArrayDataGenerator(dlwp, train_array, rank=3, input_slice=input_ind, output_slice=output_ind,
@@ -131,6 +138,9 @@ else:
     val_generator = None
     if use_keras_fit:
         val = None
+
+total_time = time.time() - start_time
+print('Time to load data: %d m %0.2f s' % (np.floor(total_time / 60), total_time % 60))
 
 
 #%% Compile the model structure with some generator data information
@@ -156,7 +166,6 @@ conv_2d_1 = CubeSphereConv2D(32, 3, **{
         'activation': 'linear',
         'data_format': 'channels_first'
     })
-# batch_norm_1 = BatchNormalization(axis=1)
 conv_2d_1_2 = CubeSphereConv2D(32, 3, **{
         'dilation_rate': 1,
         'padding': 'valid',
@@ -169,43 +178,77 @@ conv_2d_2 = CubeSphereConv2D(64, 3, **{
         'activation': 'linear',
         'data_format': 'channels_first'
     })
-# batch_norm_2 = BatchNormalization(axis=1)
-conv_2d_3 = CubeSphereConv2D(64 if skip_connections else 128, 3, **{
+conv_2d_2_2 = CubeSphereConv2D(64, 3, **{
         'dilation_rate': 1,
         'padding': 'valid',
         'activation': 'linear',
         'data_format': 'channels_first'
     })
-# batch_norm_3 = BatchNormalization(axis=1)
-conv_2d_4 = CubeSphereConv2D(32 if skip_connections else 64, 3, **{
+conv_2d_3 = CubeSphereConv2D(128, 3, **{
         'dilation_rate': 1,
         'padding': 'valid',
         'activation': 'linear',
         'data_format': 'channels_first'
     })
-# batch_norm_4 = BatchNormalization(axis=1)
-conv_2d_5 = CubeSphereConv2D(32, 3, **{
+conv_2d_3_2 = CubeSphereConv2D(128, 3, **{
         'dilation_rate': 1,
         'padding': 'valid',
         'activation': 'linear',
         'data_format': 'channels_first'
     })
-# batch_norm_5 = BatchNormalization(axis=1)
-conv_2d_5_2 = CubeSphereConv2D(32, 3, **{
+conv_2d_4 = CubeSphereConv2D(128 if skip_connections else 256, 3, **{
         'dilation_rate': 1,
         'padding': 'valid',
         'activation': 'linear',
         'data_format': 'channels_first'
     })
-conv_2d_6 = CubeSphereConv2D(cso[0], 1, **{
+conv_2d_4_2 = CubeSphereConv2D(256, 3, **{
+        'dilation_rate': 1,
         'padding': 'valid',
         'activation': 'linear',
         'data_format': 'channels_first'
     })
-split_1_1 = slice_layer(0, 16, axis=1)
-split_1_2 = slice_layer(16, 32, axis=1)
-split_2_1 = slice_layer(0, 32, axis=1)
-split_2_2 = slice_layer(32, 64, axis=1)
+conv_2d_5 = CubeSphereConv2D(64 if skip_connections else 128, 3, **{
+        'dilation_rate': 1,
+        'padding': 'valid',
+        'activation': 'linear',
+        'data_format': 'channels_first'
+    })
+conv_2d_5_2 = CubeSphereConv2D(128, 3, **{
+        'dilation_rate': 1,
+        'padding': 'valid',
+        'activation': 'linear',
+        'data_format': 'channels_first'
+    })
+conv_2d_6 = CubeSphereConv2D(32 if skip_connections else 64, 3, **{
+        'dilation_rate': 1,
+        'padding': 'valid',
+        'activation': 'linear',
+        'data_format': 'channels_first'
+    })
+conv_2d_6_2 = CubeSphereConv2D(64, 3, **{
+        'dilation_rate': 1,
+        'padding': 'valid',
+        'activation': 'linear',
+        'data_format': 'channels_first'
+    })
+conv_2d_7 = CubeSphereConv2D(32, 3, **{
+        'dilation_rate': 1,
+        'padding': 'valid',
+        'activation': 'linear',
+        'data_format': 'channels_first'
+    })
+conv_2d_7_2 = CubeSphereConv2D(32, 3, **{
+        'dilation_rate': 1,
+        'padding': 'valid',
+        'activation': 'linear',
+        'data_format': 'channels_first'
+    })
+conv_2d_8 = CubeSphereConv2D(cso[0], 1, **{
+        'padding': 'valid',
+        'activation': 'linear',
+        'data_format': 'channels_first'
+    })
 
 
 # Define the model functions.
@@ -213,8 +256,6 @@ split_2_2 = slice_layer(32, 64, axis=1)
 def basic_model(x):
     x = cube_padding_1(x)
     x = relu(conv_2d_1(x))
-    # x = cube_padding_1(x)
-    # x = relu(conv_2d_1_2(x))
     x = pooling_2(x)
     x = cube_padding_1(x)
     x = relu(conv_2d_2(x))
@@ -223,48 +264,19 @@ def basic_model(x):
     x = relu(conv_2d_3(x))
     x = up_sampling_2(x)
     x = cube_padding_1(x)
-    x = relu(conv_2d_4(x))
+    x = relu(conv_2d_6(x))
     x = up_sampling_2(x)
     x = cube_padding_1(x)
-    x = relu(conv_2d_5(x))
+    x = relu(conv_2d_7(x))
     x = cube_padding_1(x)
-    x = relu(conv_2d_5_2(x))
-    x = conv_2d_6(x)
-    return x
-
-
-def skip_model(x):
-    x = cube_padding_1(x)
-    x = relu(conv_2d_1(x))
-    # x = cube_padding_1(x)
-    # x = relu(conv_2d_1_2(x))
-    x, x1 = split_1_1(x), split_1_2(x)
-    x = pooling_2(x)
-    x = cube_padding_1(x)
-    x = relu(conv_2d_2(x))
-    x, x2 = split_2_1(x), split_2_2(x)
-    x = pooling_2(x)
-    x = cube_padding_1(x)
-    x = relu(conv_2d_3(x))
-    x = up_sampling_2(x)
-    x = cube_padding_1(x)
-    x = relu(conv_2d_4(x))
-    x = concatenate([x, x2], axis=1)
-    x = up_sampling_2(x)
-    x = cube_padding_1(x)
-    x = relu(conv_2d_5(x))
-    x = concatenate([x, x1], axis=1)
-    x = cube_padding_1(x)
-    x = relu(conv_2d_5_2(x))
-    x = conv_2d_6(x)
+    x = relu(conv_2d_7_2(x))
+    x = conv_2d_8(x)
     return x
 
 
 def unet(x):
     x0 = cube_padding_1(x)
     x0 = relu(conv_2d_1(x0))
-    # x0 = cube_padding_1(x0)
-    # x0 = relu(conv_2d_1_2(x0))
     x1 = pooling_2(x0)
     x1 = cube_padding_1(x1)
     x1 = relu(conv_2d_2(x1))
@@ -274,20 +286,93 @@ def unet(x):
     x2 = up_sampling_2(x2)
     x = concatenate([x2, x1], axis=1)
     x = cube_padding_1(x)
-    x = relu(conv_2d_4(x))
+    x = relu(conv_2d_6(x))
     x = up_sampling_2(x)
     x = concatenate([x, x0], axis=1)
     x = cube_padding_1(x)
-    x = relu(conv_2d_5(x))
+    x = relu(conv_2d_7(x))
+    x = cube_padding_1(x)
+    x = relu(conv_2d_7_2(x))
+    x = conv_2d_8(x)
+    return x
+
+
+def unet2(x):
+    x0 = cube_padding_1(x)
+    x0 = relu(conv_2d_1(x0))
+    x0 = cube_padding_1(x0)
+    x0 = relu(conv_2d_1_2(x0))
+    x1 = pooling_2(x0)
+    x1 = cube_padding_1(x1)
+    x1 = relu(conv_2d_2(x1))
+    x1 = cube_padding_1(x1)
+    x1 = relu(conv_2d_2_2(x1))
+    x2 = pooling_2(x1)
+    x2 = cube_padding_1(x2)
+    x2 = relu(conv_2d_5_2(x2))
+    x2 = cube_padding_1(x2)
+    x2 = relu(conv_2d_5(x2))
+    x2 = up_sampling_2(x2)
+    x = concatenate([x2, x1], axis=1)
+    x = cube_padding_1(x)
+    x = relu(conv_2d_6_2(x))
+    x = cube_padding_1(x)
+    x = relu(conv_2d_6(x))
+    x = up_sampling_2(x)
+    x = concatenate([x, x0], axis=1)
+    x = cube_padding_1(x)
+    x = relu(conv_2d_7(x))
+    x = cube_padding_1(x)
+    x = relu(conv_2d_7_2(x))
+    x = conv_2d_8(x)
+    return x
+
+
+def unet3(x):
+    x0 = cube_padding_1(x)
+    x0 = relu(conv_2d_1(x0))
+    x0 = cube_padding_1(x0)
+    x0 = relu(conv_2d_1_2(x0))
+    x1 = pooling_2(x0)
+    x1 = cube_padding_1(x1)
+    x1 = relu(conv_2d_2(x1))
+    x1 = cube_padding_1(x1)
+    x1 = relu(conv_2d_2_2(x1))
+    x2 = pooling_2(x1)
+    x2 = cube_padding_1(x2)
+    x2 = relu(conv_2d_3_2(x2))
+    x2 = cube_padding_1(x2)
+    x2 = relu(conv_2d_3(x2))
+    x3 = pooling_2(x2)
+    x3 = cube_padding_1(x3)
+    x3 = relu(conv_2d_4_2(x3))
+    x3 = cube_padding_1(x3)
+    x3 = relu(conv_2d_4(x3))
+    x3 = up_sampling_2(x3)
+    x = concatenate([x3, x2], axis=1)
     x = cube_padding_1(x)
     x = relu(conv_2d_5_2(x))
-    x = conv_2d_6(x)
+    x = cube_padding_1(x)
+    x = relu(conv_2d_5(x))
+    x = up_sampling_2(x)
+    x = concatenate([x, x1], axis=1)
+    x = cube_padding_1(x)
+    x = relu(conv_2d_6_2(x))
+    x = cube_padding_1(x)
+    x = relu(conv_2d_6(x))
+    x = up_sampling_2(x)
+    x = concatenate([x, x0], axis=1)
+    x = cube_padding_1(x)
+    x = relu(conv_2d_7(x))
+    x = cube_padding_1(x)
+    x = relu(conv_2d_7_2(x))
+    x = conv_2d_8(x)
     return x
 
 
 def complete_model(x_in):
     outputs = []
-    model_function = unet if skip_connections else basic_model
+    model_function = unet2 if skip_connections else basic_model
     is_seq = isinstance(x_in, (list, tuple))
     xi = x_in[0] if is_seq else x_in
     if is_seq and has_constants:
@@ -338,13 +423,14 @@ early = EarlyStoppingMin(monitor='val_loss' if val_generator is not None else 'l
                          min_epochs=min_epochs, max_epochs=max_epochs, patience=patience,
                          restore_best_weights=True, verbose=1)
 tensorboard = TensorBoard(log_dir=log_directory, batch_size=batch_size, update_freq='epoch')
+save = SaveWeightsOnEpoch(weights_file=model_file + '.keras.tmp', interval=25)
 
 if use_keras_fit:
     dlwp.fit(p_train, t_train, batch_size=batch_size, epochs=max_epochs+1, verbose=1, validation_data=val,
              callbacks=[history, RNNResetStates(), early])
 else:
     dlwp.fit_generator(generator, epochs=max_epochs+1, verbose=1, validation_data=val_generator,
-                       use_multiprocessing=True, callbacks=[history, RNNResetStates(), early])
+                       use_multiprocessing=True, workers=4, callbacks=[history, RNNResetStates(), early, save])
 end_time = time.time()
 
 # Save the model
