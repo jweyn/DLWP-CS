@@ -177,7 +177,10 @@ class SaveWeightsOnEpoch(Callback):
         if self.interval is not None and epoch % self.interval == 0:
             self.model.save_weights('%s.%s' % (self.weights_file, epoch))
         else:
-            self.model.save_weights(self.weights_file)
+            try:
+                self.model.save_weights(self.weights_file)
+            except OSError:  # If the file is temporarily system locked for any reason, avoid crashing
+                pass
 
 
 # ==================================================================================================================== #
