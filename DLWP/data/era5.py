@@ -233,8 +233,8 @@ class ERA5Reanalysis(object):
             else:
                 self.raw_files.append('%s/%s_%s.nc' % (self._root_directory, self._file_id, variable))
 
-    def retrieve(self, variables, levels=(), years='all', months='all', days='all', hourly=3, n_proc=4, verbose=False,
-                 request_kwargs=None, delete_temporary=False):
+    def retrieve(self, variables, levels=(), years='all', months='all', days='all', product='reanalysis', hourly=3,
+                 n_proc=4, verbose=False, request_kwargs=None, delete_temporary=False):
         """
         Retrieve netCDF files of ERA5 reanalysis data. Must specify the variables and pressure levels desired.
         Iterates over variable/level pairs for each API request. Note that with 3-hourly data, one variable/level pair
@@ -249,6 +249,8 @@ class ERA5Reanalysis(object):
         :param years: iterable: years of data. If 'all', use 1979-2018.
         :param months: iterable: months of data. If 'all', get all months.
         :param days: iterable: month days of data. If 'all', get all days.
+        :param product: str: type of product to retrieve. Must be one of 'reanalysis', 'ensemble_members',
+            'ensemble_mean', or 'ensemble_spread'. Note ensemble products are only 3-hourly.
         :param hourly: int: hourly time resolution; e.g., 6 for data every 6 hours.
         :param n_proc: int: number of processes for parallel retrieval
         :param verbose: bool: if True, print progress statements. The API already lists progress statements.
@@ -297,16 +299,20 @@ class ERA5Reanalysis(object):
                 except AssertionError:
                     raise ValueError('days must be integers from 1 to 31')
         days = ['%02d' % d for d in days]
+        assert product in ['reanalysis', 'ensemble_members', 'ensemble_mean', 'ensemble_spread'], \
+            "'product' must be one of 'reanalysis', 'ensemble_members', 'ensemble_mean', 'ensemble_spread'"
         if hourly < 1 or hourly > 24:
             raise ValueError('hourly interval must be between 1 and 24')
+        if product.startswith('ensemble'):
+            assert hourly % 3 == 0, "'hourly' must be a multiple of 3 for ensemble products"
         hour_daterange = pd.date_range('2000-01-01 00:00', '2000-01-01 23:00', freq='%dh' % hourly)
         hours = [d.strftime('%H:%M') for d in hour_daterange]
         if len(variables) == 0:
             print('ERA5Reanalysis.retrieve: no variables specified; will do nothing.')
             return
-        assert hasattr(levels, '__iter__')
+        assert hasattr(levels, '__iter__'), "'levels' must be iterable"
         if int(n_proc) < 0:
-            raise ValueError("'multiprocess' must be an integer >= 0")
+            raise ValueError("'n_proc' must be an integer >= 0")
 
         # Create the requests
         requests = []
@@ -315,7 +321,7 @@ class ERA5Reanalysis(object):
             if variable in pressure_variable_names.keys():
                 for level in self.dataset_levels:
                     request = {
-                        'product_type': 'reanalysis',
+                        'product_type': product,
                         'format': 'netcdf',
                         'variable': variable,
                         'pressure_level': level,
@@ -328,7 +334,7 @@ class ERA5Reanalysis(object):
                     requests.append(request)
             else:
                 request = {
-                    'product_type': 'reanalysis',
+                    'product_type': product,
                     'format': 'netcdf',
                     'variable': variable,
                     'year': years,

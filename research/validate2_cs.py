@@ -36,6 +36,7 @@ from DLWP.remap import CubeSphereRemap
 root_directory = '/home/disk/wave2/jweyn/Data/DLWP'
 predictor_file = '%s/era5_2deg_3h_CS_1979-2018_z-tau-t2_500-1000_tcwv.nc' % root_directory
 validation_file = '%s/era5_2deg_3h_validation_z500_t2m_ILL.nc' % root_directory
+climo_file = '%s/era5_2deg_3h_1979-2010_climatology_z500-z1000-t2.nc' % root_directory
 
 # Map files for cubed sphere remapping
 map_files = ('/home/disk/brume/jweyn/Documents/DLWP/map_LL91x180_CS48.nc',
@@ -43,41 +44,43 @@ map_files = ('/home/disk/brume/jweyn/Documents/DLWP/map_LL91x180_CS48.nc',
 
 # Names of model files, located in the root_directory, and labels for those models
 models = [
-    'dlwp_era5_6h_CS48_tau-sfc1000-lsm_UNET',
-    'dlwp_era5_6h_CS48_tau-sfc1000-lsm-topo_UNET',
-    'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET',
-    'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2',
+    # 'dlwp_era5_6h_CS48_tau-sfc1000-lsm_UNET2',
+    # 'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2',
     'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2-relumax',
+    'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm_UNET2-relumax',
+    # 'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2-relumax5',
+    # 'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2-relu0',
+    # 'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2-relu0max1',
 ]
 model_labels = [
-    'ERA-6h tau z1000 t2 SOL LSM UNET',
-    'ERA-6h tau z1000 t2 SOL LSM TOPO UNET',
-    'ERA-6h (x3) tau z1000 t2 SOL LSM TOPO UNET',
-    'ERA-6h (x3) tau z1000 t2 SOL LSM TOPO UNET2',
-    'ERA-6h (x3) tau z1000 t2 SOL LSM TOPO UNET2-ReLU-10',
+    # 'ERA-6h SFC4 LSM UNET2 ReLU-N',
+    # 'ERA-6h (x3) SFC4 LSM TOPO UNET2 ReLU-N',
+    '4-variable U-net CNN',
+    '4-variable U-net CNN, no topo',
+    # 'ERA-6h (x3) SFC4 LSM TOPO UNET2 ReLU-N-5',
+    # 'ERA-6h (x3) SFC4 LSM TOPO UNET2 ReLU-0',
+    # 'ERA-6h (x3) SFC4 LSM TOPO UNET2 ReLU-0-1',
 ]
 
 # Optional list of selections to make from the predictor dataset for each model. This is useful if, for example,
 # you want to examine models that have different numbers of vertical levels but one predictor dataset contains
 # the data that all models need. Separate input and output selections are available for models using different inputs
 # and outputs. Also specify the number of input/output time steps in each model.
-input_selection = output_selection = [
-    {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0']},
-    {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0']},
-    {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0']},
-    {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0']},
-    {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0']},
-]
+input_selection = output_selection = [{'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0']}] * len(models)
 
 # Optional added constant inputs
 constant_fields = [
-    [
-        (os.path.join(root_directory, 'era5_2deg_3h_CS_land_sea_mask.nc'), 'lsm'),
-        # (os.path.join(root_directory, 'era5_2deg_3h_CS_scaled_topo.nc'), 'z')
-    ],
+    # [
+    #     (os.path.join(root_directory, 'era5_2deg_3h_CS_land_sea_mask.nc'), 'lsm'),
+    #     # (os.path.join(root_directory, 'era5_2deg_3h_CS_scaled_topo.nc'), 'z')
+    # ],
     [
         (os.path.join(root_directory, 'era5_2deg_3h_CS_land_sea_mask.nc'), 'lsm'),
         (os.path.join(root_directory, 'era5_2deg_3h_CS_scaled_topo.nc'), 'z')
+    ],
+    [
+        (os.path.join(root_directory, 'era5_2deg_3h_CS_land_sea_mask.nc'), 'lsm'),
+        # (os.path.join(root_directory, 'era5_2deg_3h_CS_scaled_topo.nc'), 'z')
     ],
     [
         (os.path.join(root_directory, 'era5_2deg_3h_CS_land_sea_mask.nc'), 'lsm'),
@@ -127,20 +130,21 @@ lat_range = [-90., 90.]
 # Provide as a dictionary to extract to kwargs. If None, then averages all variables. Cannot be None if using a
 # barotropic model for comparison (specify Z500).
 selection = {
-    'varlev': 't2m/0'
+    'varlev': 'z/500'
 }
 
 # Scale the variables to original units
 scale_variables = True
 
 # Flag to do daily averages (useful for comparison to daily-averaged ECMWF S2S forecasts)
-daily_mean = True
+daily_mean = False
 
 # Optionally add another forecast
-added_forecast_file = '%s/../S2S/ECMF/daily_2m_temperature__2013-2018_from_2018_ILL_2deg.nc' % root_directory
-added_forecast_variable = 't2m'
+# added_forecast_file = '%s/../S2S/ECMF/daily_2m_temperature__2013-2018_from_2018_ILL_2deg.nc' % root_directory
+added_forecast_file = '%s/../S2S/ECMF/geopotential_500_2013-2018_from_2018_ILL_2deg.nc' % root_directory
+added_forecast_variable = 'gh'
 added_forecast_label = 'S2S ECMWF control'
-added_scale_factor = 1.
+added_scale_factor = 9.81
 
 # Do specific plots
 plot_directory = '/home/disk/brume/jweyn/Documents/DLWP/Plots'
@@ -149,10 +153,10 @@ plot_zonal = True
 plot_mse = True
 plot_spread = False
 plot_mean = False
-method = 'rmse'
-mse_title = r'2-m T; 2013-16; global'  # '20-70$^{\circ}$N'
-mse_file_name = 'rmse_era_6h_CS48_t2m_tau-sfc.pdf'
-mse_pkl_file = 'rmse_era_6h_CS48_t2m_tau-sfc.pkl'
+method = 'acc'
+mse_title = r'Z500; 2013-16; global'  # '20-70$^{\circ}$N'
+mse_file_name = 'acc_era_6h_CS48_z500-weighted_AGU-topo.pdf'
+mse_pkl_file = 'acc_era_6h_CS48_z500-weighted_AGU-topo.pkl'
 
 
 #%% Pre-processing
@@ -215,19 +219,32 @@ if isinstance(validation_set, int):
 else:  # we must have a list of datetimes
     verification_ds = remapped_ds.sel(sample=validation_set)
 
+# Load the verification data
 verification_ds = verification_ds.sel(**selection)
-
 verification_ds.load()
 verification = verify.verification_from_series(verification_ds, init_times=initialization_dates,
                                                forecast_steps=num_forecast_steps, dt=dt, f_hour_timedelta_type=False)
 verification = verification.isel(lat=((verification.lat >= lat_min) & (verification.lat <= lat_max)))
-
 if scale_variables:
     verification = verification * sel_std + sel_mean
 
 if daily_mean:
     verification['f_day'] = xr.DataArray(np.floor((verification.f_hour.values - 1) / 24.) + 1., dims=['f_hour'])
     verif_daily = verification.groupby('f_day').mean('f_hour')
+
+# Load the climatology data
+if climo_file is None:
+    climo_data = remapped_ds['predictors'].isel(
+        lat=((remapped_ds.lat >= lat_min) & (remapped_ds.lat <= lat_max))).sel(**selection)
+else:
+    print('Opening climatology from %s...' % climo_file)
+    climo_ds = xr.open_dataset(climo_file)
+    climo_ds = climo_ds.assign_coords(lat=verification_ds.lat[:].values, lon=verification_ds.lon[:].values)
+    climo_data = climo_ds['predictors'].isel(
+        lat=((climo_ds.lat >= lat_min) & (climo_ds.lat <= lat_max))).sel(**selection)
+if scale_variables:
+    climo_data = climo_data * sel_std + sel_mean
+acc_climo = climo_data.mean(*tuple(d for d in climo_data.dims if d not in ['lat', 'lon']))
 
 
 #%% Iterate through the models and calculate their stats
@@ -311,15 +328,15 @@ for m, model in enumerate(models):
     if daily_mean:
         time_series['f_day'] = xr.DataArray(np.floor((time_series.f_hour.values - 1) / 24. + 1), dims=['f_hour'])
         time_series_daily = time_series.groupby('f_day').mean('f_hour')
-        mse.append(verify.forecast_error(time_series_daily.values,
+        mse.append(verify.forecast_error(time_series_daily,
                                          verif_daily.sel(time=time_intersection,
-                                                         f_day=time_series_daily.f_day).values,
-                                         method=method))
+                                                         f_day=time_series_daily.f_day),
+                                         method=method, weighted=True, climatology=acc_climo))
         f_hours.append(time_series_daily.f_day.values * 24)
     else:
-        mse.append(verify.forecast_error(time_series.values,
-                                         verification.sel(time=time_intersection, f_hour=fh_intersection).values,
-                                         method=method))
+        mse.append(verify.forecast_error(time_series,
+                                         verification.sel(time=time_intersection, f_hour=fh_intersection),
+                                         method=method, weighted=True, climatology=acc_climo))
         f_hours.append(fh_intersection)
 
     # Plot learning curves
@@ -333,8 +350,9 @@ for m, model in enumerate(models):
         obs_zonal_std = verification[-1].std(axis=-1).mean(axis=0)
         pred_zonal_mean = time_series[-1].mean(axis=(0, -1))
         pred_zonal_std = time_series[-1].std(axis=-1).mean(axis=0)
-        zonal_mean_plot(obs_zonal_mean, obs_zonal_std, pred_zonal_mean, pred_zonal_std, dt*num_forecast_steps,
-                        '%s%s' % (model_labels[m], file_var), out_directory=plot_directory)
+        zonal_mean_plot(obs_zonal_mean, obs_zonal_std, pred_zonal_mean, pred_zonal_std, dt*num_forecast_steps // 24,
+                        var_name=file_var.upper()[1:], model_name='%s%s' % (model_labels[m], file_var),
+                        out_directory=plot_directory)
 
     # Clear the model
     dlwp = None
@@ -364,15 +382,15 @@ if added_forecast_file is not None:
     if daily_mean:
         fcst['f_day'] = xr.DataArray(np.floor((fcst.f_hour.values - 1) / 24. + 1), dims=['f_hour'])
         fcst_daily = fcst.groupby('f_day').mean('f_hour')
-        mse.append(verify.forecast_error(fcst_daily.values,
+        mse.append(verify.forecast_error(fcst_daily,
                                          verif_daily.sel(time=initialization_dates,
-                                                         f_day=fcst_daily.f_day).values,
-                                         method=method))
+                                                         f_day=fcst_daily.f_day),
+                                         method=method, weighted=True, climatology=acc_climo))
         f_hours.append(fcst_daily.f_day.values * 24)
     else:
-        mse.append(verify.forecast_error(fcst.values,
-                                         verification.sel(time=initialization_dates, f_hour=fh_intersection).values,
-                                         method=method))
+        mse.append(verify.forecast_error(fcst,
+                                         verification.sel(time=initialization_dates, f_hour=fh_intersection),
+                                         method=method, weighted=True, climatology=acc_climo))
         f_hours.append(fh_intersection)
 
     model_labels.append(added_forecast_label)
@@ -380,35 +398,34 @@ if added_forecast_file is not None:
 
 #%% Add persistence and climatology
 
-if plot_mse:
-    print('Calculating persistence forecasts...')
-    if daily_mean:
-        init = verify.verification_from_series(verification_ds,
-                                               init_times=[d - pd.Timedelta(hours=24) for d in initialization_dates],
-                                               forecast_steps=24 / dt, dt=dt).mean('f_hour')
-        f_hours.append(verif_daily.f_day.values * 24)
-    else:
-        init = verification_ds.predictors.sel(sample=verification.time).isel(
-            lat=((verification_ds.lat >= lat_min) & (verification_ds.lat <= lat_max)))
-        init.load()
-        f_hours.append(np.arange(dt, num_forecast_steps * dt + 1., dt))
-
-    if scale_variables:
-        init = init * sel_std + sel_mean
-    if 'time_step' in init.dims:
-        init = init.isel(time_step=-1)
-    mse.append(verify.forecast_error(np.repeat(init.values[None, ...], len(f_hours[-1]), axis=0),
-                                     verif_daily.values if daily_mean else verification.values, method=method))
-    model_labels.append('Persistence')
-
-    print('Calculating climatology forecasts...')
-    climo_data = remapped_ds['predictors'].isel(
-        lat=((remapped_ds.lat >= lat_min) & (remapped_ds.lat <= lat_max))).sel(**selection)
-    if scale_variables:
-        climo_data = climo_data * sel_std + sel_mean
-    mse.append(verify.monthly_climo_error(climo_data, validation_set, n_fhour=num_forecast_steps, method=method))
-    model_labels.append('Climatology')
+print('Calculating persistence forecasts...')
+if daily_mean:
+    init = verify.verification_from_series(verification_ds,
+                                           init_times=[d - pd.Timedelta(hours=24) for d in initialization_dates],
+                                           forecast_steps=24 / dt, dt=dt).mean('f_hour')
+    f_hours.append(verif_daily.f_day.values * 24)
+else:
+    init = verification_ds.predictors.sel(sample=verification.time).isel(
+        lat=((verification_ds.lat >= lat_min) & (verification_ds.lat <= lat_max)))
+    init.load()
     f_hours.append(np.arange(dt, num_forecast_steps * dt + 1., dt))
+
+if scale_variables:
+    init = init * sel_std + sel_mean
+if 'time_step' in init.dims:
+    init = init.isel(time_step=-1)
+persist = xr.concat([init] * len(f_hours[-1]), dim='f_day' if daily_mean else 'f_hour').assign_coords(
+    **{'f_day' if daily_mean else 'f_hour': verif_daily.f_day if daily_mean else verification.f_hour})
+mse.append(verify.forecast_error(persist, verif_daily if daily_mean else verification,
+                                 method=method, weighted=True, climatology=acc_climo))
+model_labels.append('Persistence')
+
+print('Calculating climatology forecasts...')
+mse.append(verify.monthly_climo_error(init, init.time, n_fhour=num_forecast_steps, method=method,
+                                      climo_da=None if climo_file is None else climo_data, by_day_of_year=True,
+                                      weighted=True))
+model_labels.append('Climatology')
+f_hours.append(np.arange(dt, num_forecast_steps * dt + 1., dt))
 
 
 #%% Plot the combined MSE as a function of forecast hour for all models
@@ -418,20 +435,21 @@ if plot_mse:
         fig = plt.figure()
         fig.set_size_inches(6, 4)
         for m, model in enumerate(model_labels):
-            if model in ['Barotropic', 'CFS', 'Persistence', 'Climatology']:
-                plt.plot(f_hours[m], mse[m], label=model, linewidth=2.)
+            if model in [added_forecast_label, 'Persistence', 'Climatology']:
+                plt.plot(f_hours[m] / 24, mse[m], label=model, linewidth=2.)
         mean = np.mean(np.array(mse[:len(models)]), axis=0)
-        plt.plot(f_hours[0], mean, 'k-', label=r'DLWP mean', linewidth=1.)
+        plt.plot(f_hours[0] / 24, mean, 'k-', label=r'DLWP mean', linewidth=1.)
         std = np.std(np.array(mse[:len(models)]), axis=0)
-        plt.fill_between(f_hours[0], mean - std, mean + std,
+        plt.fill_between(f_hours[0] / 24, mean - std, mean + std,
                          facecolor=(0.5, 0.5, 0.5, 0.5), zorder=-50)
-        plt.xlim([0, np.max(np.array(f_hours))])
-        plt.xticks(np.arange(0, np.max(np.array(f_hours)) + 1, 2 * dt))
-        plt.ylim([0, 140])
-        plt.yticks(np.arange(0, 141, 20))
+        plt.xlim([0, num_forecast_hours // 24])
+        plt.xticks(np.arange(0, num_forecast_hours // 24 + 1, 2))
+        plt.ylim(bottom=0)
+        if method in ['acc', 'cos']:
+            plt.ylim(top=1)
         plt.legend(loc='best', fontsize=8)
         plt.grid(True, color='lightgray', zorder=-100)
-        plt.xlabel('forecast hour')
+        plt.xlabel('forecast day')
         plt.ylabel(method.upper())
         plt.title(mse_title)
         plt.savefig('%s/%s' % (plot_directory, mse_file_name), bbox_inches='tight')
@@ -440,22 +458,23 @@ if plot_mse:
         fig = plt.figure()
         fig.set_size_inches(6, 4)
         for m, model in enumerate(model_labels):
-            if model in ['Barotropic', 'CFS', 'Persistence', 'Climatology']:
-                plt.plot(f_hours[m], mse[m], label=model, linewidth=2.)
+            if model in [added_forecast_label, 'Persistence', 'Climatology']:
+                plt.plot(f_hours[m] / 24, mse[m], label=model, linewidth=2.)
             else:
                 if plot_mean:
-                    plt.plot(f_hours[m], mse[m], label=model, linewidth=1., linestyle='--' if m < 10 else ':')
+                    plt.plot(f_hours[m] / 24, mse[m], label=model, linewidth=1., linestyle='--' if m < 10 else ':')
                 else:
-                    plt.plot(f_hours[m], mse[m], label=model, linewidth=2.)
+                    plt.plot(f_hours[m] / 24, mse[m], label=model, linewidth=2.)
         if plot_mean:
-            plt.plot(f_hours[0], np.mean(np.array(mse[:len(models)]), axis=0), label='mean', linewidth=2.)
-        plt.xlim([0, dt * num_forecast_steps])
-        plt.xticks(np.arange(0, num_forecast_steps * dt + 1, 4 * dt))
-        plt.ylim([0, 10])
-        plt.yticks(np.arange(0, 11, 1))
+            plt.plot(f_hours[0] / 24, np.mean(np.array(mse[:len(models)]), axis=0), label='mean', linewidth=2.)
+        plt.xlim([0, num_forecast_hours // 24])
+        plt.xticks(np.arange(0, num_forecast_hours // 24 + 1, 2))
+        plt.ylim(bottom=0)
+        if method in ['acc', 'cos']:
+            plt.ylim(top=1)
         plt.legend(loc='best', fontsize=8)
         plt.grid(True, color='lightgray', zorder=-100)
-        plt.xlabel('forecast hour')
+        plt.xlabel('forecast day')
         plt.ylabel(method.upper())
         plt.title(mse_title)
         plt.savefig('%s/%s' % (plot_directory, mse_file_name), bbox_inches='tight')

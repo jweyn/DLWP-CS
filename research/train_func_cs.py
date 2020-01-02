@@ -24,9 +24,7 @@ from DLWP.custom import CubeSpherePadding2D, CubeSphereConv2D, RNNResetStates, E
 from keras.models import Model
 import keras.backend as K
 
-
 # Set a TF session with memory growth
-
 import tensorflow as tf
 config = tf.ConfigProto()
 config.gpu_options.allow_growth = True
@@ -38,8 +36,8 @@ K.set_session(tf.Session(config=config))
 # File paths and names
 root_directory = '/home/disk/wave2/jweyn/Data/DLWP'
 predictor_file = os.path.join(root_directory, 'era5_2deg_3h_CS_1979-2018_z-tau-t2_500-1000_tcwv.nc')
-model_file = os.path.join(root_directory, 'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2')
-log_directory = os.path.join(root_directory, 'logs', 'era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2')
+model_file = os.path.join(root_directory, 'dlwp_era5_6h-3_CS48_tau-sfc1000-psi-lsm-topo_UNET2-relumax')
+log_directory = os.path.join(root_directory, 'logs', 'era5_6h-3_CS48_tau-sfc1000-psi-lsm_UNET2-relumax')
 reverse_lat = False
 
 # Optional paths to files containing constant fields to add to the inputs
@@ -65,7 +63,7 @@ skip_connections = True
 # keep dimensions correct. The number of output iterations to train on is given by integration_steps. The actual number
 # of forecast steps (units of model delta t) is io_time_steps * integration_steps. The parameter data_interval
 # governs what the effective delta t is; it is a multiplier for the temporal resolution of the data file.
-io_selection = {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0']}
+io_selection = {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0', 'sf/850']}
 io_time_steps = 2
 integration_steps = 2
 data_interval = 2

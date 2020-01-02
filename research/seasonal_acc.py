@@ -34,18 +34,24 @@ validation_file = '%s/era5_2deg_3h_validation_z500_t2m_ILL.nc' % root_directory
 
 # Names of model files, located in the root_directory, and labels for those models
 models = [
-    'dlwp_era5_6h_CS48_tau-sfc1000-lsm_UNET',
-    'dlwp_era5_6h_CS48_tau-sfc1000-lsm-topo_UNET',
-    'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET',
-    'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2',
+    # 'dlwp_era5_6h_CS48_tau-sfc1000-lsm_UNET2',
+    # 'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2',
+    'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm_UNET2-relumax',
     'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2-relumax',
+    # 'dlwp_relu_0-5-10_mean',
+    # 'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2-relumax5',
+    # 'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2-relu0',
+    # 'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2-relu0max1',
 ]
 model_labels = [
-    'ERA-6h tau z1000 t2 SOL LSM UNET',
-    'ERA-6h tau z1000 t2 SOL LSM TOPO UNET',
-    'ERA-6h (x3) tau z1000 t2 SOL LSM TOPO UNET',
-    'ERA-6h (x3) tau z1000 t2 SOL LSM TOPO UNET2',
-    'ERA-6h (x3) tau z1000 t2 SOL LSM TOPO UNET2-ReLU-10',
+    # 'ERA-6h SFC4 LSM UNET2 ReLU-N',
+    # 'ERA-6h (x3) SFC4 LSM TOPO UNET2 ReLU-N',
+    '4-variable U-net CNN, no topo',
+    '4-variable U-net CNN',
+    # 'Ensemble of 3 CNNs',
+    # 'ERA-6h (x3) SFC4 LSM TOPO UNET2 ReLU-N-5',
+    # 'ERA-6h (x3) SFC4 LSM TOPO UNET2 ReLU-0',
+    # 'ERA-6h (x3) SFC4 LSM TOPO UNET2 ReLU-0-1',
 ]
 
 # Subset the validation data. We will calculate an entire verification based on this part of the data. It is acceptable
@@ -78,19 +84,20 @@ lat_range = [-70., 70.]
 # Provide as a dictionary to extract to kwargs. If None, then averages all variables. Cannot be None if using a
 # barotropic model for comparison (specify Z500).
 selection = {
-    'varlev': 't2m/0'
+    'varlev': 'z/500'
 }
 
 # Optionally add another forecast
-added_forecast_file = '%s/../S2S/ECMF/daily_2m_temperature__2013-2018_from_2018_ILL_2deg.nc' % root_directory
-added_forecast_variable = 't2m'
+# added_forecast_file = '%s/../S2S/ECMF/daily_2m_temperature__2013-2018_from_2018_ILL_2deg.nc' % root_directory
+added_forecast_file = '%s/../S2S/ECMF/geopotential_500_2013-2018_from_2018_ILL_2deg.nc' % root_directory
+added_forecast_variable = 'gh'
 added_forecast_label = 'S2S ECMWF control'
-added_scale_factor = 1.
+added_scale_factor = 9.81
 
 # Plot options
 plot_directory = '/home/disk/brume/jweyn/Documents/DLWP/Plots'
-acc_title = r'T2 3-4 weeks; 2013-16; -70 to 70'
-acc_file_name = 'acc_t2_week3-4_tau-sfc_70to70.pdf'
+acc_title = r'Z500 3-4 weeks; 2013-16; -70 to 70'
+acc_file_name = 'acc_z500_week3-4_70to70.pdf'
 
 
 #%% Pre-processing
@@ -199,7 +206,7 @@ for m, model in enumerate(models):
 
     # Calculate the cosine ACC of the forecasts
     # Filter out where the forecasts blow up. This is only a temporary patch for poor models.
-    filter_time = anomaly_forecast.time[xr.where(anomaly_forecast.max(('lat', 'lon')) < 50., True, False)]
+    filter_time = anomaly_forecast.time[xr.where(anomaly_forecast.max(('lat', 'lon')) < 5000., True, False)]
     acc_forecast.append(cosine_acc(anomaly_forecast.sel(time=filter_time), anomaly_true.sel(time=filter_time)))
 
     # Clean up
@@ -262,7 +269,8 @@ bar_values = np.array([da.mean('time').values for da in acc_forecast])
 bar_min = -1 * np.array([da.min('time').values for da in acc_forecast]) + bar_values
 bar_max = np.array([da.max('time').values for da in acc_forecast]) - bar_values
 
-plt.barh(range(len(model_labels)), bar_values, xerr=(bar_min, bar_max), tick_label=model_labels, color='C0')
+plt.barh(range(len(model_labels)), bar_values, xerr=(bar_min, bar_max), tick_label=model_labels,
+         color=['C%d' % m for m in range(len(model_labels))])
 plt.grid(True, color='lightgray', zorder=-100)
 plt.xlabel('cosine ACC')
 plt.xlim(-0.5, 1.0)
