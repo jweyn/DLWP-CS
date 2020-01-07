@@ -17,9 +17,17 @@ from datetime import datetime
 
 from DLWP.model import SeriesDataGenerator, TimeSeriesEstimator
 from DLWP.model.preprocessing import get_constants
-from DLWP.util import load_model, train_test_split_ind
+from DLWP.util import load_model, remove_chars
 from DLWP.model import verify
 from DLWP.remap import CubeSphereRemap
+
+# Set a TF session with memory growth
+import tensorflow as tf
+import keras.backend as K
+config = tf.ConfigProto()
+config.gpu_options.allow_growth = True
+# config.gpu_options.visible_device_list = '1'
+K.set_session(tf.Session(config=config))
 
 
 #%% User parameters
@@ -39,10 +47,13 @@ map_files = ('/home/disk/brume/jweyn/Documents/DLWP/map_LL91x180_CS48.nc',
              '/home/disk/brume/jweyn/Documents/DLWP/map_CS48_LL91x180.nc')
 
 # Names of model files, located in the root_directory, and labels for those models
-model = 'dlwp_era5_6h_CS48_tau-sfc1000-lsm_UNET'
-model_label = 'ERA-6h tau z1000 t2 SOL LSM UNET'
+model = 'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2-relumax'
+model_label = '4-variable U-net CNN'
 
-constant_fields = [(os.path.join(root_directory, 'era5_2deg_3h_CS_land_sea_mask.nc'), 'lsm')]
+constant_fields = [
+    (os.path.join(root_directory, 'era5_2deg_3h_CS_land_sea_mask.nc'), 'lsm'),
+    (os.path.join(root_directory, 'era5_2deg_3h_CS_scaled_topo.nc'), 'z')
+]
 
 # Optional list of selections to make from the predictor dataset for each model. This is useful if, for example,
 # you want to examine models that have different numbers of vertical levels but one predictor dataset contains
@@ -54,20 +65,28 @@ add_insolation = True
 input_time_steps = 2
 output_time_steps = 2
 
-# Validation set to use. Either an integer (number of validation samples, taken from the end), or an iterable of
-# pandas datetime objects.
-start_date = datetime(2013, 1, 1, 0)
-end_date = datetime(2013, 12, 31, 18)
+# Selection of continuous dates in the data to use as input series.
+start_date = datetime(2012, 12, 31, 0)
+end_date = datetime(2014, 1, 31, 18)
 validation_set = pd.date_range(start_date, end_date, freq='6H')
-# validation_set = [d for d in validation_set if d.month in [6, 7, 8]]
 validation_set = np.array(validation_set, dtype='datetime64[ns]')
 
+# Select forecast initialization times. These are the actual forecast start times we will run the model and verification
+# for, and will also correspond to the comparison model forecast start times.
+dates_1 = pd.date_range('2013-01-01', '2013-12-31', freq='7D')
+dates_2 = pd.date_range('2013-01-04', '2013-12-31', freq='7D')
+dates_0 = dates_1.append(dates_2).sort_values()
+dates = dates_0.copy()
+# for year in range(2014, 2017):
+#     dates = dates.append(pd.DatetimeIndex(pd.Series(dates_0).apply(lambda x: x.replace(year=year))))
+initialization_dates = xr.DataArray(dates)
+
 # Number of forward integration weather forecast time steps
-num_forecast_hours = 28 * 24
+num_forecast_hours = 365 * 24
 dt = 6
 
 # Scale the variables to original units
-scale_variables = False
+scale_variables = True
 
 
 #%% Pre-processing
@@ -77,12 +96,7 @@ if 'time_step' in all_ds.dims:
     all_ds = all_ds.isel(time_step=-1)
 
 # Find the validation set
-if isinstance(validation_set, int):
-    n_sample = all_ds.dims['sample']
-    train_set, val_set = train_test_split_ind(n_sample, validation_set, method='last')
-    predictor_ds = all_ds.isel(sample=val_set)
-else:  # we must have a list of datetimes
-    predictor_ds = all_ds.sel(sample=validation_set)
+predictor_ds = all_ds.sel(sample=validation_set)
 
 # Fix negative latitude for solar radiation input
 if reverse_lat:
@@ -98,7 +112,7 @@ print('Loading model %s...' % model)
 # Load the model
 dlwp, history = load_model('%s/%s' % (root_directory, model), True, gpus=1)
 
-forecast_file = '%s/%s_forecast.nc' % (root_directory, model)
+forecast_file = '%s/forecast_%s.nc' % (root_directory, remove_chars(model))
 if os.path.isfile(forecast_file):
     print('Forecast file %s already exists; using it. If issues arise, delete this file and try again.'
           % forecast_file)
@@ -117,7 +131,9 @@ else:
 
     # Make a time series prediction
     print('Predicting with model %s...' % model_label)
-    time_series = estimator.predict(num_forecast_steps, verbose=1)
+    samples = np.array([int(np.where(val_generator.ds['sample'] == s)[0]) for s in initialization_dates]) \
+        - input_time_steps + 1
+    time_series = estimator.predict(num_forecast_steps, samples=samples, verbose=1)
 
     # Scale the time series. Smart enough to align dimensions without expand_dims
     if scale_variables:
@@ -134,8 +150,7 @@ else:
     time_series = verify.add_metadata_to_forecast_cs(
         time_series.values,
         fh,
-        predictor_ds.sel(**output_selection).isel(sample=slice(input_time_steps - 1,
-                                                               -output_time_steps * sequence))
+        predictor_ds.sel(**output_selection).sel(sample=initialization_dates)
     )
 
     # Save and remap

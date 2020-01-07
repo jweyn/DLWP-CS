@@ -11,7 +11,6 @@ Evaluate 3-4 week anomaly forecasts with cosine similarity. Requires forecast ou
 import numpy as np
 import pandas as pd
 import xarray as xr
-import pickle
 import os
 from datetime import datetime
 import matplotlib
@@ -19,7 +18,7 @@ matplotlib.use('agg')
 import matplotlib.pyplot as plt
 
 from DLWP.model import verify
-from DLWP.plot import remove_chars
+from DLWP.util import remove_chars
 
 
 #%% User parameters
@@ -36,8 +35,8 @@ validation_file = '%s/era5_2deg_3h_validation_z500_t2m_ILL.nc' % root_directory
 models = [
     # 'dlwp_era5_6h_CS48_tau-sfc1000-lsm_UNET2',
     # 'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2',
-    'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm_UNET2-relumax',
     'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2-relumax',
+    'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm_UNET2-relumax',
     # 'dlwp_relu_0-5-10_mean',
     # 'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2-relumax5',
     # 'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2-relu0',
@@ -46,8 +45,8 @@ models = [
 model_labels = [
     # 'ERA-6h SFC4 LSM UNET2 ReLU-N',
     # 'ERA-6h (x3) SFC4 LSM TOPO UNET2 ReLU-N',
-    '4-variable U-net CNN, no topo',
     '4-variable U-net CNN',
+    '4-variable U-net CNN, no topo',
     # 'Ensemble of 3 CNNs',
     # 'ERA-6h (x3) SFC4 LSM TOPO UNET2 ReLU-N-5',
     # 'ERA-6h (x3) SFC4 LSM TOPO UNET2 ReLU-0',

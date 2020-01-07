@@ -10,6 +10,7 @@ DLWP utilities.
 
 import pickle
 import random
+import re
 import tempfile
 from importlib import import_module
 from copy import copy
@@ -418,3 +419,13 @@ def to_bool(x):
     except (ValueError, TypeError):
         pass
     raise ValueError("Unknown boolean specifier: '%s'." % x)
+
+
+def remove_chars(s):
+    """
+    Remove characters from a string that have unintended effects on file paths.
+
+    :param s: str
+    :return: str
+    """
+    return ''.join(re.split('[$/\\\\]', s))

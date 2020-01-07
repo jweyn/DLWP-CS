@@ -28,6 +28,7 @@ import keras.backend as K
 import tensorflow as tf
 config = tf.ConfigProto()
 config.gpu_options.allow_growth = True
+# config.gpu_options.visible_device_list = '1'
 K.set_session(tf.Session(config=config))
 
 
@@ -35,7 +36,7 @@ K.set_session(tf.Session(config=config))
 
 # File paths and names
 root_directory = '/home/disk/wave2/jweyn/Data/DLWP'
-predictor_file = os.path.join(root_directory, 'era5_2deg_3h_CS_1979-2018_z-tau-t2_500-1000_tcwv.nc')
+predictor_file = os.path.join(root_directory, 'era5_2deg_3h_CS_1979-2018_z-tau-t2_500-1000_tcwv_psi850.nc')
 model_file = os.path.join(root_directory, 'dlwp_era5_6h-3_CS48_tau-sfc1000-psi-lsm-topo_UNET2-relumax')
 log_directory = os.path.join(root_directory, 'logs', 'era5_6h-3_CS48_tau-sfc1000-psi-lsm_UNET2-relumax')
 reverse_lat = False

@@ -11,7 +11,7 @@ a bit cleaner to place them here than have plotting functions defined in every u
 
 import numpy as np
 from matplotlib import pyplot as plt
-from .util import remove_chars
+from ..util import remove_chars
 
 
 def plot_basemap(basemap, lon, lat, z=None, plot_type='contourf', plot_kwargs=None,

@@ -22,9 +22,16 @@ import matplotlib.pyplot as plt
 from DLWP.model import SeriesDataGenerator, TimeSeriesEstimator
 from DLWP.model import verify
 from DLWP.model.preprocessing import get_constants
-from DLWP.plot import history_plot, zonal_mean_plot, remove_chars
-from DLWP.util import load_model, train_test_split_ind
+from DLWP.plot import history_plot, zonal_mean_plot
+from DLWP.util import load_model, train_test_split_ind, remove_chars
 from DLWP.remap import CubeSphereRemap
+
+# Set a TF session with memory growth
+import tensorflow as tf
+config = tf.ConfigProto()
+config.gpu_options.allow_growth = True
+# config.gpu_options.visible_device_list = '1'
+K.set_session(tf.Session(config=config))
 
 
 #%% User parameters
