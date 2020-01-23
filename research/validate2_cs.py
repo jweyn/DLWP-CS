@@ -30,7 +30,7 @@ from DLWP.remap import CubeSphereRemap
 import tensorflow as tf
 config = tf.ConfigProto()
 config.gpu_options.allow_growth = True
-# config.gpu_options.visible_device_list = '1'
+config.gpu_options.visible_device_list = '1'
 K.set_session(tf.Session(config=config))
 
 
@@ -41,7 +41,7 @@ K.set_session(tf.Session(config=config))
 # forward and inverse mapping so that it is processed the same way. It should also contain the mean and std of the
 # validation variables.
 root_directory = '/home/disk/wave2/jweyn/Data/DLWP'
-predictor_file = '%s/era5_2deg_3h_CS_1979-2018_z-tau-t2_500-1000_tcwv.nc' % root_directory
+predictor_file = '%s/era5_2deg_3h_CS_1979-2018_z-tau-t2_500-1000_tcwv_psi850.nc' % root_directory
 validation_file = '%s/era5_2deg_3h_validation_z500_t2m_ILL.nc' % root_directory
 climo_file = '%s/era5_2deg_3h_1979-2010_climatology_z500-z1000-t2.nc' % root_directory
 
@@ -54,7 +54,9 @@ models = [
     # 'dlwp_era5_6h_CS48_tau-sfc1000-lsm_UNET2',
     # 'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2',
     'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2-relumax',
-    'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm_UNET2-relumax',
+    'dlwp_era5_6h-3_CS48_tau-sfc1000-tcwv-lsm-topo_UNET2-relumax',
+    # 'dlwp_era5_6h-3_CS48_tau-sfc1000-psi-lsm-topo_UNET2-relumax',
+    # 'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm_UNET2-relumax',
     # 'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2-relumax5',
     # 'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2-relu0',
     # 'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2-relu0max1',
@@ -62,8 +64,10 @@ models = [
 model_labels = [
     # 'ERA-6h SFC4 LSM UNET2 ReLU-N',
     # 'ERA-6h (x3) SFC4 LSM TOPO UNET2 ReLU-N',
-    '4-variable U-net CNN',
-    '4-variable U-net CNN, no topo',
+    '4-variable U-net',
+    '5-variable U-net TCWV',
+    # '5-variable U-net CNN (Psi$_{850}$)'
+    # '4-variable U-net CNN, no topo',
     # 'ERA-6h (x3) SFC4 LSM TOPO UNET2 ReLU-N-5',
     # 'ERA-6h (x3) SFC4 LSM TOPO UNET2 ReLU-0',
     # 'ERA-6h (x3) SFC4 LSM TOPO UNET2 ReLU-0-1',
@@ -73,14 +77,22 @@ model_labels = [
 # you want to examine models that have different numbers of vertical levels but one predictor dataset contains
 # the data that all models need. Separate input and output selections are available for models using different inputs
 # and outputs. Also specify the number of input/output time steps in each model.
-input_selection = output_selection = [{'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0']}] * len(models)
+input_selection = output_selection = [
+    {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0']},
+    {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0', 'tcwv/0']},
+    {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0']},
+]
 
 # Optional added constant inputs
 constant_fields = [
-    # [
-    #     (os.path.join(root_directory, 'era5_2deg_3h_CS_land_sea_mask.nc'), 'lsm'),
-    #     # (os.path.join(root_directory, 'era5_2deg_3h_CS_scaled_topo.nc'), 'z')
-    # ],
+    [
+        (os.path.join(root_directory, 'era5_2deg_3h_CS_land_sea_mask.nc'), 'lsm'),
+        (os.path.join(root_directory, 'era5_2deg_3h_CS_scaled_topo.nc'), 'z')
+    ],
+    [
+        (os.path.join(root_directory, 'era5_2deg_3h_CS_land_sea_mask.nc'), 'lsm'),
+        (os.path.join(root_directory, 'era5_2deg_3h_CS_scaled_topo.nc'), 'z')
+    ],
     [
         (os.path.join(root_directory, 'era5_2deg_3h_CS_land_sea_mask.nc'), 'lsm'),
         (os.path.join(root_directory, 'era5_2deg_3h_CS_scaled_topo.nc'), 'z')
@@ -88,10 +100,6 @@ constant_fields = [
     [
         (os.path.join(root_directory, 'era5_2deg_3h_CS_land_sea_mask.nc'), 'lsm'),
         # (os.path.join(root_directory, 'era5_2deg_3h_CS_scaled_topo.nc'), 'z')
-    ],
-    [
-        (os.path.join(root_directory, 'era5_2deg_3h_CS_land_sea_mask.nc'), 'lsm'),
-        (os.path.join(root_directory, 'era5_2deg_3h_CS_scaled_topo.nc'), 'z')
     ],
     [
         (os.path.join(root_directory, 'era5_2deg_3h_CS_land_sea_mask.nc'), 'lsm'),
@@ -160,10 +168,10 @@ plot_zonal = True
 plot_mse = True
 plot_spread = False
 plot_mean = False
-method = 'acc'
+method = 'rmse'
 mse_title = r'Z500; 2013-16; global'  # '20-70$^{\circ}$N'
-mse_file_name = 'acc_era_6h_CS48_z500-weighted_AGU-topo.pdf'
-mse_pkl_file = 'acc_era_6h_CS48_z500-weighted_AGU-topo.pkl'
+mse_file_name = 'rmse_era_6h_CS48_z500-tcwv.pdf'
+mse_pkl_file = 'rmse_era_6h_CS48_z500-tcwv.pkl'
 
 
 #%% Pre-processing
@@ -364,7 +372,7 @@ for m, model in enumerate(models):
     # Clear the model
     dlwp = None
     time_series = None
-    K.clear_session()
+    # K.clear_session()
 
 
 #%% Add an extra model
@@ -423,6 +431,8 @@ if 'time_step' in init.dims:
     init = init.isel(time_step=-1)
 persist = xr.concat([init] * len(f_hours[-1]), dim='f_day' if daily_mean else 'f_hour').assign_coords(
     **{'f_day' if daily_mean else 'f_hour': verif_daily.f_day if daily_mean else verification.f_hour})
+if daily_mean:
+    persist = persist.assign_coords(time=verif_daily.time[:])
 mse.append(verify.forecast_error(persist, verif_daily if daily_mean else verification,
                                  method=method, weighted=True, climatology=acc_climo))
 model_labels.append('Persistence')

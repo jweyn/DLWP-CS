@@ -865,7 +865,7 @@ class CubeSphereConv2D(Layer):
         if self.independent_north_pole:
             self.north_pole_kernel = self.add_weight(shape=kernel_shape,
                                                      initializer=self.kernel_initializer,
-                                                     name='polar_kernel',
+                                                     name='north_pole_kernel',
                                                      regularizer=self.kernel_regularizer,
                                                      constraint=self.kernel_constraint)
         if self.use_bias:
@@ -882,7 +882,7 @@ class CubeSphereConv2D(Layer):
             if self.independent_north_pole:
                 self.north_pole_bias = self.add_weight(shape=(self.filters,),
                                                        initializer=self.bias_initializer,
-                                                       name='polar_bias',
+                                                       name='north_pole_bias',
                                                        regularizer=self.bias_regularizer,
                                                        constraint=self.bias_constraint)
 

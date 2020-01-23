@@ -26,7 +26,7 @@ import tensorflow as tf
 import keras.backend as K
 config = tf.ConfigProto()
 config.gpu_options.allow_growth = True
-# config.gpu_options.visible_device_list = '1'
+config.gpu_options.visible_device_list = '1'
 K.set_session(tf.Session(config=config))
 
 
@@ -36,8 +36,8 @@ K.set_session(tf.Session(config=config))
 # with the conversion to the face coordinate. The scale file contains 'mean' and 'std' variables to perform inverse
 # scaling back to real data units.
 root_directory = '/home/disk/wave2/jweyn/Data/DLWP'
-predictor_file = '%s/era5_2deg_3h_CS_1979-2018_z-tau-t2_500-1000.nc' % root_directory
-scale_file = '%s/era5_2deg_3h_1979-2018_z-tau-t2_500-1000.nc' % root_directory
+predictor_file = '%s/era5_2deg_3h_CS_1979-2018_z-tau-t2_500-1000_tcwv_psi850.nc' % root_directory
+scale_file = '%s/era5_2deg_scale_z-tau-t2_500-1000_tcwv_psi850.nc' % root_directory
 
 # If True, reverse the latitude coordinate in the predicted output
 reverse_lat = False
@@ -47,8 +47,9 @@ map_files = ('/home/disk/brume/jweyn/Documents/DLWP/map_LL91x180_CS48.nc',
              '/home/disk/brume/jweyn/Documents/DLWP/map_CS48_LL91x180.nc')
 
 # Names of model files, located in the root_directory, and labels for those models
-model = 'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2-relumax'
-model_label = '4-variable U-net CNN'
+model = 'dlwp_era5_6h-3_CS48_tau-sfc1000-tcwv-lsm-topo_UNET2-relumax'
+model_label = '5-variable U-net CNN TCWV'
+file_suffix = '_20170710'
 
 constant_fields = [
     (os.path.join(root_directory, 'era5_2deg_3h_CS_land_sea_mask.nc'), 'lsm'),
@@ -59,26 +60,21 @@ constant_fields = [
 # you want to examine models that have different numbers of vertical levels but one predictor dataset contains
 # the data that all models need. Separate input and output selections are available for models using different inputs
 # and outputs. Also specify the number of input/output time steps in each model.
-input_selection = {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0']}
-output_selection = {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0']}
+input_selection = {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0', 'tcwv/0']}
+output_selection = {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0', 'tcwv/0']}
 add_insolation = True
 input_time_steps = 2
 output_time_steps = 2
 
 # Selection of continuous dates in the data to use as input series.
-start_date = datetime(2012, 12, 31, 0)
-end_date = datetime(2014, 1, 31, 18)
+start_date = datetime(2017, 6, 30, 0)
+end_date = datetime(2017, 7, 31, 18)
 validation_set = pd.date_range(start_date, end_date, freq='6H')
 validation_set = np.array(validation_set, dtype='datetime64[ns]')
 
 # Select forecast initialization times. These are the actual forecast start times we will run the model and verification
 # for, and will also correspond to the comparison model forecast start times.
-dates_1 = pd.date_range('2013-01-01', '2013-12-31', freq='7D')
-dates_2 = pd.date_range('2013-01-04', '2013-12-31', freq='7D')
-dates_0 = dates_1.append(dates_2).sort_values()
-dates = dates_0.copy()
-# for year in range(2014, 2017):
-#     dates = dates.append(pd.DatetimeIndex(pd.Series(dates_0).apply(lambda x: x.replace(year=year))))
+dates = pd.date_range('2017-07-01', '2017-07-10', freq='D')
 initialization_dates = xr.DataArray(dates)
 
 # Number of forward integration weather forecast time steps
@@ -112,7 +108,7 @@ print('Loading model %s...' % model)
 # Load the model
 dlwp, history = load_model('%s/%s' % (root_directory, model), True, gpus=1)
 
-forecast_file = '%s/forecast_%s.nc' % (root_directory, remove_chars(model))
+forecast_file = '%s/forecast_%s%s.nc' % (root_directory, remove_chars(model), file_suffix)
 if os.path.isfile(forecast_file):
     print('Forecast file %s already exists; using it. If issues arise, delete this file and try again.'
           % forecast_file)

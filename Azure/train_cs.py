@@ -30,8 +30,15 @@ from azureml.core import Run
 from keras.layers import Input, UpSampling3D, AveragePooling3D, concatenate, ReLU, Reshape, Concatenate
 from DLWP.custom import CubeSpherePadding2D, CubeSphereConv2D, RNNResetStates, EarlyStoppingMin, \
     RunHistory, SaveWeightsOnEpoch
-
 from keras.models import Model
+import keras.backend as K
+
+# Set a TF session with memory growth
+import tensorflow as tf
+config = tf.ConfigProto()
+config.gpu_options.allow_growth = True
+# config.gpu_options.visible_device_list = '1'
+K.set_session(tf.Session(config=config))
 
 
 #%% Parse user arguments
@@ -76,14 +83,15 @@ constant_fields = [
 
 # NN parameters. Regularization is applied to LSTM layers by default. weight_loss indicates whether to weight the
 # loss function preferentially in the mid-latitudes.
-model_is_convolutional = True
+cnn_model_name = 'unet2'
+base_filter_number = 48
 min_epochs = 100
 max_epochs = 1000
 patience = 50
-batch_size = 64
+batch_size = 32
 loss_by_step = None
 shuffle = True
-skip_connections = True
+independent_north_pole = False
 
 # Data parameters. Specify the input/output variables/levels and input/output time steps. DLWPFunctional requires that
 # the inputs and outputs match exactly (for now). Ensure that the selections use LISTS of values (even for only 1) to
@@ -98,7 +106,7 @@ data_interval = 2
 add_solar = True
 
 # Use multiple GPUs, if available
-n_gpu = 2
+n_gpu = 1
 
 # Force use of the keras model.fit() method. May run faster in some instances, but uses (input_time_steps +
 # output_time_steps) times more memory.
@@ -137,7 +145,7 @@ constants = get_constants(constant_fields or None)
 
 #%% Create a model and the data generators
 
-dlwp = DLWPFunctional(is_convolutional=model_is_convolutional, is_recurrent=False, time_dim=io_time_steps)
+dlwp = DLWPFunctional(is_convolutional=True, is_recurrent=False, time_dim=io_time_steps)
 
 # Find the validation set
 if train_set is None:
@@ -192,101 +200,41 @@ if has_constants:
 cube_padding_1 = CubeSpherePadding2D(1, data_format='channels_first')
 pooling_2 = AveragePooling3D((2, 2, 1), data_format='channels_first')
 up_sampling_2 = UpSampling3D((2, 2, 1), data_format='channels_first')
-relu = ReLU(max_value=1.)
-conv_2d_1 = CubeSphereConv2D(32, 3, **{
-        'dilation_rate': 1,
-        'padding': 'valid',
-        'activation': 'linear',
-        'data_format': 'channels_first'
-    })
-conv_2d_1_2 = CubeSphereConv2D(32, 3, **{
-        'dilation_rate': 1,
-        'padding': 'valid',
-        'activation': 'linear',
-        'data_format': 'channels_first'
-    })
-conv_2d_2 = CubeSphereConv2D(64, 3, **{
-        'dilation_rate': 1,
-        'padding': 'valid',
-        'activation': 'linear',
-        'data_format': 'channels_first'
-    })
-conv_2d_2_2 = CubeSphereConv2D(64, 3, **{
-        'dilation_rate': 1,
-        'padding': 'valid',
-        'activation': 'linear',
-        'data_format': 'channels_first'
-    })
-conv_2d_3 = CubeSphereConv2D(128, 3, **{
-        'dilation_rate': 1,
-        'padding': 'valid',
-        'activation': 'linear',
-        'data_format': 'channels_first'
-    })
-conv_2d_3_2 = CubeSphereConv2D(128, 3, **{
-        'dilation_rate': 1,
-        'padding': 'valid',
-        'activation': 'linear',
-        'data_format': 'channels_first'
-    })
-conv_2d_4 = CubeSphereConv2D(128 if skip_connections else 256, 3, **{
-        'dilation_rate': 1,
-        'padding': 'valid',
-        'activation': 'linear',
-        'data_format': 'channels_first'
-    })
-conv_2d_4_2 = CubeSphereConv2D(256, 3, **{
-        'dilation_rate': 1,
-        'padding': 'valid',
-        'activation': 'linear',
-        'data_format': 'channels_first'
-    })
-conv_2d_5 = CubeSphereConv2D(64 if skip_connections else 128, 3, **{
-        'dilation_rate': 1,
-        'padding': 'valid',
-        'activation': 'linear',
-        'data_format': 'channels_first'
-    })
-conv_2d_5_2 = CubeSphereConv2D(128, 3, **{
-        'dilation_rate': 1,
-        'padding': 'valid',
-        'activation': 'linear',
-        'data_format': 'channels_first'
-    })
-conv_2d_6 = CubeSphereConv2D(32 if skip_connections else 64, 3, **{
-        'dilation_rate': 1,
-        'padding': 'valid',
-        'activation': 'linear',
-        'data_format': 'channels_first'
-    })
-conv_2d_6_2 = CubeSphereConv2D(64, 3, **{
-        'dilation_rate': 1,
-        'padding': 'valid',
-        'activation': 'linear',
-        'data_format': 'channels_first'
-    })
-conv_2d_7 = CubeSphereConv2D(32, 3, **{
-        'dilation_rate': 1,
-        'padding': 'valid',
-        'activation': 'linear',
-        'data_format': 'channels_first'
-    })
-conv_2d_7_2 = CubeSphereConv2D(32, 3, **{
-        'dilation_rate': 1,
-        'padding': 'valid',
-        'activation': 'linear',
-        'data_format': 'channels_first'
-    })
-conv_2d_8 = CubeSphereConv2D(cso[0], 1, **{
-        'padding': 'valid',
-        'activation': 'linear',
-        'data_format': 'channels_first'
-    })
+relu = ReLU(negative_slope=0.1, max_value=10.)
+conv_kwargs = {
+    'dilation_rate': 1,
+    'padding': 'valid',
+    'activation': 'linear',
+    'data_format': 'channels_first',
+    'independent_north_pole': independent_north_pole,
+    'flip_north_pole': not independent_north_pole
+}
+skip_connections = 'unet' in cnn_model_name.lower()
+conv_2d_1 = CubeSphereConv2D(base_filter_number, 3, **conv_kwargs)
+conv_2d_1_2 = CubeSphereConv2D(base_filter_number, 3, **conv_kwargs)
+conv_2d_1_3 = CubeSphereConv2D(base_filter_number, 3, **conv_kwargs)
+conv_2d_2 = CubeSphereConv2D(base_filter_number * 2, 3, **conv_kwargs)
+conv_2d_2_2 = CubeSphereConv2D(base_filter_number * 2, 3, **conv_kwargs)
+conv_2d_2_3 = CubeSphereConv2D(base_filter_number * 2, 3, **conv_kwargs)
+conv_2d_3 = CubeSphereConv2D(base_filter_number * 4, 3, **conv_kwargs)
+conv_2d_3_2 = CubeSphereConv2D(base_filter_number * 4, 3, **conv_kwargs)
+conv_2d_4 = CubeSphereConv2D(base_filter_number * 4 if skip_connections else base_filter_number * 8, 3, **conv_kwargs)
+conv_2d_4_2 = CubeSphereConv2D(base_filter_number * 8, 3, **conv_kwargs)
+conv_2d_5 = CubeSphereConv2D(base_filter_number * 2 if skip_connections else base_filter_number * 4, 3, **conv_kwargs)
+conv_2d_5_2 = CubeSphereConv2D(base_filter_number * 4, 3, **conv_kwargs)
+conv_2d_5_3 = CubeSphereConv2D(base_filter_number * 4, 3, **conv_kwargs)
+conv_2d_6 = CubeSphereConv2D(base_filter_number if skip_connections else base_filter_number * 2, 3, **conv_kwargs)
+conv_2d_6_2 = CubeSphereConv2D(base_filter_number * 2, 3, **conv_kwargs)
+conv_2d_6_3 = CubeSphereConv2D(base_filter_number * 2, 3, **conv_kwargs)
+conv_2d_7 = CubeSphereConv2D(base_filter_number, 3, **conv_kwargs)
+conv_2d_7_2 = CubeSphereConv2D(base_filter_number, 3, **conv_kwargs)
+conv_2d_7_3 = CubeSphereConv2D(base_filter_number, 3, **conv_kwargs)
+conv_2d_8 = CubeSphereConv2D(cso[0], 1, **conv_kwargs)
 
 
 # Define the model functions.
 
-def basic_model(x):
+def basic(x):
     x = cube_padding_1(x)
     x = relu(conv_2d_1(x))
     x = pooling_2(x)
@@ -366,6 +314,47 @@ def unet3(x):
     x0 = relu(conv_2d_1(x0))
     x0 = cube_padding_1(x0)
     x0 = relu(conv_2d_1_2(x0))
+    x0 = cube_padding_1(x0)
+    x0 = relu(conv_2d_1_3(x0))
+    x1 = pooling_2(x0)
+    x1 = cube_padding_1(x1)
+    x1 = relu(conv_2d_2(x1))
+    x1 = cube_padding_1(x1)
+    x1 = relu(conv_2d_2_2(x1))
+    x1 = cube_padding_1(x1)
+    x1 = relu(conv_2d_2_3(x1))
+    x2 = pooling_2(x1)
+    x2 = cube_padding_1(x2)
+    x2 = relu(conv_2d_5_3(x2))
+    x2 = cube_padding_1(x2)
+    x2 = relu(conv_2d_5_2(x2))
+    x2 = cube_padding_1(x2)
+    x2 = relu(conv_2d_5(x2))
+    x2 = up_sampling_2(x2)
+    x = concatenate([x2, x1], axis=1)
+    x = cube_padding_1(x)
+    x = relu(conv_2d_6_3(x))
+    x = cube_padding_1(x)
+    x = relu(conv_2d_6_2(x))
+    x = cube_padding_1(x)
+    x = relu(conv_2d_6(x))
+    x = up_sampling_2(x)
+    x = concatenate([x, x0], axis=1)
+    x = cube_padding_1(x)
+    x = relu(conv_2d_7(x))
+    x = cube_padding_1(x)
+    x = relu(conv_2d_7_2(x))
+    x = cube_padding_1(x)
+    x = relu(conv_2d_7_3(x))
+    x = conv_2d_8(x)
+    return x
+
+
+def unet4(x):
+    x0 = cube_padding_1(x)
+    x0 = relu(conv_2d_1(x0))
+    x0 = cube_padding_1(x0)
+    x0 = relu(conv_2d_1_2(x0))
     x1 = pooling_2(x0)
     x1 = cube_padding_1(x1)
     x1 = relu(conv_2d_2(x1))
@@ -405,7 +394,7 @@ def unet3(x):
 
 def complete_model(x_in):
     outputs = []
-    model_function = unet2 if skip_connections else basic_model
+    model_function = globals()[cnn_model_name]
     is_seq = isinstance(x_in, (list, tuple))
     xi = x_in[0] if is_seq else x_in
     if is_seq and has_constants:
