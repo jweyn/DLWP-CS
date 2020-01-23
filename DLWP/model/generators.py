@@ -13,7 +13,7 @@ import warnings
 import numpy as np
 import xarray as xr
 from keras.utils import Sequence
-from ..util import delete_nan_samples, insolation
+from ..util import delete_nan_samples, insolation, to_bool
 
 
 class DataGenerator(Sequence):
@@ -331,23 +331,31 @@ class SeriesDataGenerator(Sequence):
     solar radiation, to the inputs.
     """
 
-    def __init__(self, model, ds, input_sel=None, output_sel=None, input_time_steps=1, output_time_steps=1,
+    def __init__(self, model, ds, rank=2, input_sel=None, output_sel=None, input_time_steps=1, output_time_steps=1,
                  sequence=None, interval=1, add_insolation=False, batch_size=32, shuffle=False, remove_nan=True,
-                 load='required'):
+                 load='required', delay_load=False, constants=None):
         """
         Initialize a SeriesDataGenerator.
 
         :param model: instance of a DLWP model
         :param ds: xarray Dataset: predictor dataset. Should have attribute 'predictors'.
+        :param rank: int: the number of spatial dimensions (e.g. 2 for 2-d data and convolutions)
         :param input_sel: dict: variable/level selection for input features
         :param output_sel: dict: variable/level selection for output features
         :param input_time_steps: int: number of time steps in the input features
         :param output_time_steps: int: number of time steps in the output features (recommended either 1 or the same
             as input_time_steps)
-        :param sequence: int or None: if int, then the output targets is a list of sequence consecutive forecast steps
-        :param interval: int: the number of steps to take when producing target data. For example, if interval is 2 and
-            the spacing between time steps is 6 h, the target will be 12 hours in the future.
-        :param add_insolation: bool: if True, add insolation to the inputs. Incompatible with 3-d convolutions.
+        :param sequence: int or None: if int, then the output targets is a list of sequence consecutive forecast steps.
+            Note that in this mode, if add_insolation is True, the inputs are also a list of consecutive forecast steps,
+            with the first step containing all of the input data and subsequent steps containing only the requisite
+            insolation fields.
+        :param interval: int: the number of steps to take between data samples and within input/output time steps.
+            Effectively it is the model delta t multiplier for the data resolution.
+        :param add_insolation: bool or str:
+            if False: do not add incoming solar radiation
+            if True: add insolation to the inputs. Incompatible with 3-d convolutions.
+            if 'hourly': same as True
+            if 'daily': add the daily max insolation without diurnal cycle
         :param batch_size: int: number of samples to take at a time from the dataset
         :param shuffle: bool: if True, randomly select batches
         :param remove_nan: bool: if True, remove any samples with NaNs
@@ -357,11 +365,17 @@ class SeriesDataGenerator(Sequence):
             'required': load only the required variables, but this also loads two separate datasets for predictors and
                 targets
             'minimal': load only one copy of the data, but also loads all of the variables. This may use half as much
-                memory as 'required', but only if there are no unused extra variables in the file.
+                memory as 'required', but only if there are no unused extra variables in the file. Note that in order
+                to attempt to use numpy views to save memory, the order of variables may be different from the
+                input and output selections.
+        :param delay_load: if True, delay the loading of the data until the first call to generate()
+        :param constants: ndarray: additional constant fields to add to each input. Must match the spatial dimensions
+            (last `rank` dimensions) of the input data.
         """
         self.model = model
         if not hasattr(ds, 'predictors'):
             raise ValueError("dataset must have 'predictors' variable")
+        assert int(rank) > 0
         assert int(input_time_steps) > 0
         assert int(output_time_steps) > 0
         assert int(batch_size) > 0
@@ -374,9 +388,19 @@ class SeriesDataGenerator(Sequence):
                     load = 'required'
                 else:
                     raise ValueError("'load' must be one of 'full', 'required', or 'minimal'")
+        try:
+            add_insolation = to_bool(add_insolation)
+        except ValueError:
+            pass
+        assert isinstance(add_insolation, (bool, str))
+        if isinstance(add_insolation, str):
+            assert add_insolation in ['hourly', 'daily']
+        self._add_insolation = 1 if isinstance(add_insolation, str) else int(add_insolation)
+        self._daily_insolation = str(add_insolation) == 'daily'
+        self._load = load
+        self._is_loaded = False
+
         self.ds = ds
-        if load == 'full':
-            ds.load()
         self._batch_size = batch_size
         self._shuffle = shuffle
         self._remove_nan = remove_nan
@@ -386,9 +410,9 @@ class SeriesDataGenerator(Sequence):
         self._indices = []
         self._sequence = sequence
         if self._sequence is not None:
-            self._n_sample = ds.dims['sample'] - input_time_steps - output_time_steps * sequence + 2 - interval
+            self._n_sample = ds.dims['sample'] - interval * (input_time_steps + output_time_steps * sequence) + 1
         else:
-            self._n_sample = ds.dims['sample'] - input_time_steps - output_time_steps + 2 - interval
+            self._n_sample = ds.dims['sample'] - interval * (input_time_steps + output_time_steps) + 1
         if 'time_step' in ds.dims:
             # Use -1 index because Preprocessor.data_to_samples (which generates a 'time_step' dim), assigns the
             # datetime 'sample' dim based on the initialization time, time_step=-1
@@ -396,31 +420,79 @@ class SeriesDataGenerator(Sequence):
         else:
             self.da = self.ds.predictors
 
+        self.rank = rank
         self._input_sel = input_sel or {}
+        if len(self._input_sel) == 0:
+            if 'varlev' in self.ds.variables.keys():
+                self._input_sel = {'varlev': self.ds['varlev'].values}
+            else:
+                self._input_sel = {'variable': self.ds['variable'].values, 'level': self.ds['level'].values}
         self._output_sel = output_sel or {}
+        if len(self._output_sel) == 0:
+            if 'varlev' in self.ds.variables.keys():
+                self._output_sel = {'varlev': self.ds['varlev'].values}
+            else:
+                self._output_sel = {'variable': self.ds['variable'].values, 'level': self.ds['level'].values}
         self._input_time_steps = input_time_steps
         self._output_time_steps = output_time_steps
         self._interval = interval
 
-        if load == 'minimal':
-            self.da.load()
-        self.input_da = self.da.sel(**self._input_sel)
-        self.output_da = self.da.sel(**self._output_sel)
-        if load == 'required':
-            self.input_da.load()
-            self.output_da.load()
+        # Temporarily set DataArrays for coordinates, overwritten when data are loaded
+        self.input_da = self.da.isel(sample=[0]).sel(**self._input_sel)
+        self.output_da = self.da.isel(sample=[0]).sel(**self._output_sel)
+        if not delay_load:
+            self._load_data()
 
         self.on_epoch_end()
 
         # Pre-generate the insolation data
-        self._add_insolation = int(add_insolation)
-        if add_insolation:
-            sol = insolation(self.da.sample.values, self.da.lat.values, self.da.lon.values)
-            self.insolation_da = xr.DataArray(sol, coords={
-                'sample': self.da.sample,
-                'lat': self.da.lat,
-                'lon': self.da.lon
-            }, dims=['sample', 'lat', 'lon'])
+        if self._add_insolation:
+            sol = insolation(self.da.sample.values, self.ds.lat.values, self.ds.lon.values,
+                             daily=self._daily_insolation)
+            self.insolation_da = xr.DataArray(sol, dims=['sample'] + ['x%d' % r for r in range(self.rank)])
+            self.insolation_da['sample'] = self.da.sample.values
+
+        # Add extra constants
+        self.constants = constants
+        if self.constants is not None:
+            try:
+                assert self.constants.shape[-self.rank:] == self.shape[-self.rank:]
+            except AssertionError:
+                raise ValueError('spatial dimensions of constants must be the same as input data; got %s and %s' %
+                                 (self.constants.shape[-self.rank:], self.shape[-self.rank:]))
+
+    def _load_data(self):
+        if not(not self._load):
+            print('SeriesDataGenerator: loading data to memory')
+        if self._load == 'full':
+            self.ds.load()
+        if self._load == 'minimal':
+            # Try to transpose the axes so we can use basic indexing to return views
+            if 'varlev' in self._input_sel.keys():
+                union = [s for s in self._input_sel['varlev'] if s in self._output_sel['varlev']]
+                added_in = [s for s in self._input_sel['varlev'] if s not in union]
+                added_out = [s for s in self._output_sel['varlev'] if s not in union]
+                if len(added_in) > 0 and len(added_out) > 0:
+                    warnings.warn("Found extra variables in both input and output, could not reduce to basic "
+                                  "indexing. 'minimal' indexing will use much more memory than 'required'.")
+                    self.da.load()
+                    self.input_da = self.da.sel(**self._input_sel)
+                    self.output_da = self.da.sel(**self._output_sel)
+                else:
+                    self.da = self.da.sel(varlev=union + added_in + added_out)
+                    self.da.load()
+                    self.input_da = self.da.isel(varlev=slice(0, len(union) + len(added_in)))
+                    self.output_da = self.da.isel(varlev=slice(0, len(union) + len(added_out)))
+            else:
+                raise NotImplementedError("Check for 'minimal' data loading not implemented yet for input files with "
+                                          "variable/level axes. Use 'required' to avoid excessive memory use.")
+        else:
+            self.input_da = self.da.sel(**self._input_sel)
+            self.output_da = self.da.sel(**self._output_sel)
+            if self._load == 'required':
+                self.input_da.load()
+                self.output_da.load()
+        self._is_loaded = True
 
     @property
     def shape(self):
@@ -434,7 +506,8 @@ class SeriesDataGenerator(Sequence):
         """
         :return: int: the number of input features; includes insolation
         """
-        return int(np.prod(self.shape)) + int(np.prod(self.shape[-2:])) * self._input_time_steps * self._add_insolation
+        return int(np.prod(self.shape)) + int(np.prod(self.shape[-self.rank:])) \
+            * self._input_time_steps * self._add_insolation
 
     @property
     def dense_shape(self):
@@ -454,10 +527,11 @@ class SeriesDataGenerator(Sequence):
             (time_step, channels, y, x); if not, (channels, y, x). Includes insolation.
         """
         if self._keep_time_axis:
-            return (self._input_time_steps,) + (int(np.prod(self.shape[1:-2]))+self._add_insolation,) + self.shape[-2:]
+            return (self._input_time_steps,) + (int(np.prod(self.shape[1:-self.rank])) + self._add_insolation,)\
+                + self.shape[-self.rank:]
         else:
-            return (int(np.prod(self.shape[:-2])) +
-                    self._input_time_steps * self._add_insolation,) + self.input_da.shape[-2:]
+            return (int(np.prod(self.shape[:-self.rank])) +
+                    self._input_time_steps * self._add_insolation,) + self.shape[-self.rank:]
 
     @property
     def shape_2d(self):
@@ -504,9 +578,10 @@ class SeriesDataGenerator(Sequence):
             recurrent, (time_step, channels, y, x); if not, (channels, y, x).
         """
         if self._keep_time_axis:
-            return (self._output_time_steps,) + (int(np.prod(self.output_shape[1:-2])),) + self.output_shape[-2:]
+            return (self._output_time_steps,) + (int(np.prod(self.output_shape[1:-self.rank])),) \
+                + self.output_shape[-self.rank:]
         else:
-            return (int(np.prod(self.output_shape[:-2])),) + self.output_da.shape[-2:]
+            return (int(np.prod(self.output_shape[:-self.rank])),) + self.shape[-self.rank:]
 
     @property
     def output_shape_2d(self):
@@ -521,6 +596,15 @@ class SeriesDataGenerator(Sequence):
         else:
             return self.output_convolution_shape
 
+    @property
+    def insolation_shape(self):
+        """
+        :return: the shape of insolation inputs in steps 1- of an input sequence, or None if add_insolation is False.
+            Note that it always includes the time step dimension, but no channels dimension. The network needs to
+            accommodate this.
+        """
+        return tuple((self._input_time_steps, 1) + self.convolution_shape[-self.rank:])
+
     def on_epoch_end(self):
         self._indices = np.arange(self._n_sample)
         if self._shuffle:
@@ -533,30 +617,49 @@ class SeriesDataGenerator(Sequence):
             samples = np.array(samples, dtype=np.int)
         n_sample = len(samples)
 
+        if not self._is_loaded:
+            self._load_data()
+
         # Predictors
-        p = np.concatenate([self.input_da.values[samples + n, np.newaxis] for n in range(self._input_time_steps)],
-                           axis=1)
+        p = np.concatenate([self.input_da.values[samples + n * self._interval, np.newaxis]
+                            for n in range(self._input_time_steps)], axis=1)
         if self._add_insolation:
             # Pretend like we have no insolation and keep the time axis
             self._add_insolation = False
             keep_time = bool(self._keep_time_axis)
             self._keep_time_axis = True
-            s = tuple(self.convolution_shape)
+            shape = tuple(self.convolution_shape)
             self._add_insolation = True
             self._keep_time_axis = bool(keep_time)
-            sol = np.concatenate([self.insolation_da.values[samples + n, np.newaxis]
-                                  for n in range(self._input_time_steps)], axis=1)
-            p = p.reshape((n_sample,) + s)
-            p = np.concatenate([p, sol[:, :, np.newaxis]], axis=2)
+            insol = []
+            if self._sequence is not None:
+                for s in range(self._sequence):
+                    insol.append(
+                        np.concatenate(
+                            [self.insolation_da.values[samples + self._interval * (self._input_time_steps * s + n),
+                                                       np.newaxis, np.newaxis] for n in range(self._input_time_steps)],
+                            axis=1
+                        )
+                    )
+            else:
+                insol.append(
+                    np.concatenate([self.insolation_da.values[samples + n * self._interval, np.newaxis, np.newaxis]
+                                    for n in range(self._input_time_steps)], axis=1)
+                )
+            p = p.reshape((n_sample,) + shape)
+            p = np.concatenate([p, insol[0]], axis=2)
         p = p.reshape((n_sample, -1))
 
         # Targets, including sequence if desired
         if self._sequence is not None:
             targets = []
             for s in range(self._sequence):
-                t = np.concatenate([self.output_da.values[samples + self._input_time_steps + self._interval - 1 +
-                                                          self._output_time_steps * s + n, np.newaxis]
-                                    for n in range(self._output_time_steps)], axis=1)
+                t = np.concatenate(
+                    [self.output_da.values[samples + self._interval * (
+                            self._input_time_steps + self._output_time_steps * s + n), np.newaxis]
+                     for n in range(self._output_time_steps)],
+                    axis=1
+                )
 
                 t = t.reshape((n_sample, -1))
 
@@ -577,9 +680,13 @@ class SeriesDataGenerator(Sequence):
                     t = t.reshape((n_sample,) + self.output_dense_shape)
 
                 targets.append(t)
+
+            # Sequence of inputs (plus insolation) for predictors
+            if self._add_insolation:
+                p = [p] + insol[1:]
         else:
-            t = np.concatenate([self.output_da.values[samples + self._input_time_steps + n +
-                                                      self._interval - 1, np.newaxis]
+            t = np.concatenate([self.output_da.values[samples + self._interval * (self._input_time_steps + n),
+                                                      np.newaxis]
                                 for n in range(self._output_time_steps)], axis=1)
 
             t = t.reshape((n_sample, -1))
@@ -601,6 +708,342 @@ class SeriesDataGenerator(Sequence):
                 t = t.reshape((n_sample,) + self.output_dense_shape)
 
             targets = t
+
+        # Add constants
+        if self.constants is not None:
+            constants = np.repeat(np.expand_dims(self.constants, axis=0), n_sample, axis=0)
+            if isinstance(p, list):
+                p = p + [constants]
+            else:
+                p = [p, constants]
+
+        return p, targets
+
+    def __len__(self):
+        """
+        :return: the number of batches per epoch
+        """
+        return int(np.ceil(self._n_sample / self._batch_size))
+
+    def __getitem__(self, index):
+        """
+        Get one batch of data
+        :param index: index of batch
+        :return: (ndarray, ndarray): predictors, targets
+        """
+        # Generate indexes of the batch
+        if int(index) < 0:
+            index = len(self) + index
+        if index > len(self):
+            raise IndexError
+        indexes = self._indices[index * self._batch_size:(index + 1) * self._batch_size]
+
+        # Generate data
+        X, y = self.generate(indexes)
+
+        return X, y
+
+
+class ArrayDataGenerator(Sequence):
+    """
+    Based on the SeriesDataGenerator class, this generator is designed to take a single array of input data loaded
+    externally (see the prepare_data_array method in .preprocessing) and manipulate views to produce each batch of
+    samples. For simplicity, this class does not store the model information and does not allow for model-based
+    scaling or imputing of data. It is also possible to use a netCDF4 variable as the input array for disk-based IO.
+    """
+
+    def __init__(self, model, array, rank=2, batch_size=32, input_slice=None, output_slice=None,
+                 input_time_steps=1, output_time_steps=1, sequence=None, interval=1,
+                 shuffle=False, remove_nan=True, insolation_array=None, constants=None):
+        """
+        Initialize an ArrayDataGenerator.
+
+        :param model: instance of a DLWP model, just used for some metadata
+        :param array: np.array or netCDF4.variable: array of predictor data; order (time, variable, ...)
+        :param rank: int: the number of spatial dimensions (e.g. 2 for 2-d data and convolutions)
+        :param batch_size: int: number of samples to take at a time from the dataset
+        :param input_slice: slice or array-like: variable/level selection for input features
+        :param output_slice: slice or array-like: variable/level selection for output features
+        :param input_time_steps: int: number of time steps in the input features
+        :param output_time_steps: int: number of time steps in the output features (recommended either 1 or the same
+            as input_time_steps)
+        :param sequence: int or None: if int, then the output targets is a list of sequence consecutive forecast steps.
+            Note that in this mode, if add_insolation is True, the inputs are also a list of consecutive forecast steps,
+            with the first step containing all of the input data and subsequent steps containing only the requisite
+            insolation fields.
+        :param interval: int: the number of steps to take between data samples and within input/output time steps.
+            Effectively it is the model delta t multiplier for the data resolution.
+        :param shuffle: bool: if True, randomly select batches
+        :param remove_nan: bool: if True, remove any samples with NaNs
+        :param insolation_array: np.array: insolation (see DLWP.util.insolation) for the given data
+        :param constants: ndarray: additional constant fields to add to each input. Must match the spatial dimensions
+            (last `rank` dimensions) of the input data.
+        """
+        assert int(rank) > 0
+        assert int(input_time_steps) > 0
+        assert int(output_time_steps) > 0
+        assert int(batch_size) > 0
+        assert int(interval) > 0
+        if sequence is not None:
+            assert int(sequence) > 0
+
+        self.array = array
+        self._batch_size = batch_size
+        self._shuffle = shuffle
+        self._remove_nan = remove_nan
+        self._is_convolutional = model.is_convolutional
+        self._keep_time_axis = model.is_recurrent
+        self._impute_missing = model.impute
+        self._indices = []
+        self._sequence = sequence
+        if self._sequence is not None:
+            self._n_sample = array.shape[0] - interval * (input_time_steps + output_time_steps * sequence) + 1
+        else:
+            self._n_sample = array.shape[0] - interval * (input_time_steps + output_time_steps) + 1
+
+        self.rank = rank
+        self._input_slice = input_slice or slice(None)
+        self._output_slice = output_slice or slice(None)
+        self._input_time_steps = input_time_steps
+        self._output_time_steps = output_time_steps
+        self._interval = interval
+
+        if isinstance(self._input_slice, slice):
+            self._input_size = len(range(*self._input_slice.indices(array.shape[1])))
+        else:
+            self._input_size = len(self._input_slice)
+        if isinstance(self._output_slice, slice):
+            self._output_size = len(range(*self._output_slice.indices(array.shape[1])))
+        else:
+            self._output_size = len(self._output_slice)
+
+        self.on_epoch_end()
+
+        # Add insolation
+        self.insolation_array = insolation_array
+        self._add_insolation = 1 if self.insolation_array is not None else 0
+        assert self.insolation_array.shape[-self.rank:] == self.shape[-self.rank:], \
+            "spatial dimensions of insolation must be the same as input data; got %s and %s" % \
+            (self.insolation_array.shape[-self.rank:], self.shape[-self.rank:])
+
+        # Add extra constants
+        self.constants = constants
+        if self.constants is not None:
+            assert self.constants.shape[-self.rank:] == self.shape[-self.rank:], \
+                "spatial dimensions of constants must be the same as input data; got %s and %s" % \
+                (self.constants.shape[-self.rank:], self.shape[-self.rank:])
+
+    @property
+    def shape(self):
+        """
+        :return: the original shape of input data: (time_step, varlev, lat, lon); excludes insolation
+        """
+        return (self._input_time_steps, self._input_size) + self.array.shape[2:]
+
+    @property
+    def n_features(self):
+        """
+        :return: int: the number of input features; includes insolation
+        """
+        return int(np.prod(self.shape)) + int(np.prod(self.shape[-self.rank:])) \
+            * self._input_time_steps * self._add_insolation
+
+    @property
+    def dense_shape(self):
+        """
+        :return: the shape of flattened input features. If the model is recurrent, (time_step, features); otherwise,
+            (features,).
+        """
+        if self._keep_time_axis:
+            return (self.shape[0],) + (self.n_features // self.shape[0],)
+        else:
+            return (self.n_features,) + ()
+
+    @property
+    def convolution_shape(self):
+        """
+        :return: the shape of the predictors expected by a Conv2D or ConvLSTM2D layer. If the model is recurrent,
+            (time_step, channels, y, x); if not, (channels, y, x). Includes insolation.
+        """
+        if self._keep_time_axis:
+            return (self._input_time_steps,) + (int(np.prod(self.shape[1:-self.rank])) + self._add_insolation,)\
+                + self.shape[-self.rank:]
+        else:
+            return (int(np.prod(self.shape[:-self.rank])) +
+                    self._input_time_steps * self._add_insolation,) + self.shape[-self.rank:]
+
+    @property
+    def shape_2d(self):
+        """
+        :return: the shape of the predictors expected by a Conv2D layer, (channels, y, x); includes insolation
+        """
+        if self._keep_time_axis:
+            self._keep_time_axis = False
+            s = tuple(self.convolution_shape)
+            self._keep_time_axis = True
+            return s
+        else:
+            return self.convolution_shape
+
+    @property
+    def output_shape(self):
+        """
+        :return: the original shape of outputs: (time_step, [variable, level,] lat, lon)
+        """
+        return (self._output_time_steps, self._output_size) + self.array.shape[2:]
+
+    @property
+    def output_n_features(self):
+        """
+        :return: int: the number of output features
+        """
+        return int(np.prod(self.output_shape))
+
+    @property
+    def output_dense_shape(self):
+        """
+        :return: the shape of flattened output features. If the model is recurrent, (time_step, features); otherwise,
+            (features,).
+        """
+        if self._keep_time_axis:
+            return (self.output_shape[0],) + (self.output_n_features // self.output_shape[0],)
+        else:
+            return (self.output_n_features,) + ()
+
+    @property
+    def output_convolution_shape(self):
+        """
+        :return: the shape of the predictors expected to be returned by a Conv2D or ConvLSTM2D layer. If the model is
+            recurrent, (time_step, channels, y, x); if not, (channels, y, x).
+        """
+        if self._keep_time_axis:
+            return (self._output_time_steps,) + (int(np.prod(self.output_shape[1:-self.rank])),) \
+                + self.output_shape[-self.rank:]
+        else:
+            return (int(np.prod(self.output_shape[:-self.rank])),) + self.shape[-self.rank:]
+
+    @property
+    def output_shape_2d(self):
+        """
+        :return: the shape of the predictors expected to be returned by a Conv2D layer, (channels, y, x)
+        """
+        if self._keep_time_axis:
+            self._keep_time_axis = False
+            s = tuple(self.output_convolution_shape)
+            self._keep_time_axis = True
+            return s
+        else:
+            return self.output_convolution_shape
+
+    @property
+    def insolation_shape(self):
+        """
+        :return: the shape of insolation inputs in steps 1- of an input sequence, or None if add_insolation is False.
+            Note that it always includes the time step dimension, but no channels dimension. The network needs to
+            accommodate this.
+        """
+        return tuple((self._input_time_steps, 1) + self.convolution_shape[-self.rank:])
+
+    def on_epoch_end(self):
+        self._indices = np.arange(self._n_sample)
+        if self._shuffle:
+            np.random.shuffle(self._indices)
+
+    def generate(self, samples):
+        if len(samples) == 0:
+            samples = np.arange(self._n_sample, dtype=np.int)
+        else:
+            samples = np.array(samples, dtype=np.int)
+        n_sample = len(samples)
+
+        # Predictors
+        p = np.concatenate([self.array[samples + n * self._interval, self._input_slice][:, np.newaxis]
+                            for n in range(self._input_time_steps)], axis=1)
+        if self._add_insolation:
+            # Pretend like we have no insolation and keep the time axis
+            self._add_insolation = False
+            keep_time = bool(self._keep_time_axis)
+            self._keep_time_axis = True
+            shape = tuple(self.convolution_shape)
+            self._add_insolation = True
+            self._keep_time_axis = bool(keep_time)
+            insol = []
+            if self._sequence is not None:
+                for s in range(self._sequence):
+                    insol.append(
+                        np.concatenate(
+                            [self.insolation_array[samples + self._interval * (self._input_time_steps * s + n),
+                                                   np.newaxis, np.newaxis] for n in range(self._input_time_steps)],
+                            axis=1
+                        )
+                    )
+            else:
+                insol.append(
+                    np.concatenate([self.insolation_array[samples + n * self._interval, np.newaxis, np.newaxis]
+                                    for n in range(self._input_time_steps)], axis=1)
+                )
+            p = p.reshape((n_sample,) + shape)
+            p = np.concatenate([p, insol[0]], axis=2)
+        p = p.reshape((n_sample, -1))
+
+        # Targets, including sequence if desired
+        if self._sequence is not None:
+            targets = []
+            for s in range(self._sequence):
+                t = np.concatenate(
+                    [self.array[samples + self._interval * (self._input_time_steps + self._output_time_steps * s + n),
+                                self._output_slice][:, np.newaxis]
+                     for n in range(self._output_time_steps)],
+                    axis=1
+                )
+
+                t = t.reshape((n_sample, -1))
+
+                # Remove samples with NaN if requested
+                if self._remove_nan:
+                    p, t = delete_nan_samples(p, t)
+
+                # Format spatial shape for convolutions; also takes care of time axis
+                if self._is_convolutional:
+                    p = p.reshape((n_sample,) + self.convolution_shape)
+                    t = t.reshape((n_sample,) + self.output_convolution_shape)
+                elif self._keep_time_axis:
+                    p = p.reshape((n_sample,) + self.dense_shape)
+                    t = t.reshape((n_sample,) + self.output_dense_shape)
+
+                targets.append(t)
+
+            # Sequence of inputs (plus insolation) for predictors
+            if self._add_insolation:
+                p = [p] + insol[1:]
+        else:
+            t = np.concatenate([self.array[samples + self._interval * (self._input_time_steps + n),
+                                           np.newaxis, self._output_slice]
+                                for n in range(self._output_time_steps)], axis=1)
+
+            t = t.reshape((n_sample, -1))
+
+            # Remove samples with NaN; scale and impute
+            if self._remove_nan:
+                p, t = delete_nan_samples(p, t)
+
+            # Format spatial shape for convolutions; also takes care of time axis
+            if self._is_convolutional:
+                p = p.reshape((n_sample,) + self.convolution_shape)
+                t = t.reshape((n_sample,) + self.output_convolution_shape)
+            elif self._keep_time_axis:
+                p = p.reshape((n_sample,) + self.dense_shape)
+                t = t.reshape((n_sample,) + self.output_dense_shape)
+
+            targets = t
+
+        # Add constants
+        if self.constants is not None:
+            constants = np.repeat(np.expand_dims(self.constants, axis=0), n_sample, axis=0)
+            if isinstance(p, list):
+                p = p + [constants]
+            else:
+                p = [p, constants]
 
         return p, targets
 

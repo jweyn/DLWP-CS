@@ -29,18 +29,52 @@ from DLWP.data import CFSReforecast
 
 # Open the data file
 root_directory = '/home/disk/wave2/jweyn/Data/DLWP'
-predictor_file = '%s/cfs_6h_1979-2010_z500-th3-7-w700-rh850-pwat_NH_T2.nc' % root_directory
+predictor_file = '%s/cfs_6h_1979-2010_z500-1000_tau_sfc_NH.nc' % root_directory
+# predictor_file = '%s/cfs_6h_1979-2010_z500_tau300-700.nc' % root_directory
 
 # Names of model files, located in the root_directory, and labels for those models
+# models = [
+#     # '../Models/dlwp_1979-2010_hgt_500_NH_T2F_FINAL-lstm',
+#     # '../Models/dlwp_6h_tau_z-tau-out_fit',
+# ] + ['tau-lstm-avg/tau-lstm-avg-%02d' % d for d in range(1, 5)]
+# model_labels = [
+#     r'tau-lstm-avg-%02d' % d for d in range(1, 5)
+# ]
+# '../Models/z-random/z-02',
+# '../Models/tau-random/tau-11',
+# '../Models/z-lstm-random/z-lstm-08',
+# '../Models/dlwp_1979-2010_hgt-thick_300-500-700_NH_T2F_FINAL-lstm',
+# models = [
+#     'dlwp_1979-2010_hgt-thick_300-500-700_NH_T2F_FINAL-lstm',
+#     'dlwp_6h_tau-lstm_data-075',
+#     'dlwp_6h_tau-lstm_data-050',
+#     'dlwp_6h_tau-lstm_data-025',
+#     'dlwp_6h_tau-lstm_data-012',
+#     'dlwp_6h_tau-lstm_data-008',
+#     'dlwp_6h_tau-lstm_data-004'
+# ]
+# model_labels = [
+#     r'$\tau$ LSTM (24 years)',
+#     '18 years',
+#     '12 years',
+#     '6 years',
+#     '3 years',
+#     '2 years',
+#     '1 year'
+# ]
 models = [
-    '/dlwp_1979-2010_hgt-thick_300-500-700_NH_T2F_FINAL-lstm',
-    'dlwp_6h_tau-lstm_z-tau-out_fillpad',
-    'dlwp_6h_tau-lstm_z-tau-out_avgpool'
+    'dlwp_1979-2010_hgt-thick_300-500-700_NH_T2F_FINAL-lstm',
+    'dlwp_6h_tau-lstm_relu-max1',
+    'dlwp_6h_tau-lstm_relu-max1-sym',
+    'dlwp_6h_tau-lstm_relu-max1-3x3',
+    'dlwp_6h_tau-lstm_relu-max1-3x3-sym'
 ]
 model_labels = [
     r'$\tau$ LSTM',
-    r'$\tau$ LSTM fill',
-    r'$\tau$ LSTM avg pool',
+    r'$\tau$ LSTM ReLU1',
+    r'$\tau$ LSTM ReLU1 sym',
+    r'$\tau$ LSTM ReLU1 3x3',
+    r'$\tau$ LSTM ReLU1 3x3 sym'
 ]
 
 # Optional list of selections to make from the predictor dataset for each model. This is useful if, for example,
@@ -49,17 +83,13 @@ model_labels = [
 # and outputs. Also specify the number of input/output time steps in each model.
 input_selection = [
     {'varlev': ['HGT/500', 'THICK/300-700']},
-    {'varlev': ['HGT/500', 'THICK/300-700']},
-    {'varlev': ['HGT/500', 'THICK/300-700']},
-]
+] * len(models)
 output_selection = [
     {'varlev': ['HGT/500', 'THICK/300-700']},
-    {'varlev': ['HGT/500', 'THICK/300-700']},
-    {'varlev': ['HGT/500', 'THICK/300-700']},
-]
+] * len(models)
 add_insolation = [False] * len(models)
-input_time_steps = [2, ] * len(models)
-output_time_steps = [2, ] * len(models)
+input_time_steps = [2] * len(models)
+output_time_steps = [2] * len(models)
 
 # Models which use up-sampling need to have an even number of latitudes. This is usually done by cropping out the
 # north pole. Set this option to do that.
@@ -68,25 +98,26 @@ crop_north_pole = True
 # Validation set to use. Either an integer (number of validation samples, taken from the end), or an iterable of
 # pandas datetime objects.
 # validation_set = 4 * (365 * 4 + 1)
-start_date = datetime(2007, 1, 1, 0)
-end_date = datetime(2009, 12, 31, 18)
-validation_set = np.array(pd.date_range(start_date, end_date, freq='6H'), dtype='datetime64')
-# validation_set = [d for d in validation_set if d.month in [1, 2, 12]]
+start_date = datetime(2003, 1, 1, 0)
+end_date = datetime(2006, 12, 31, 18)
+validation_set = pd.date_range(start_date, end_date, freq='6H')
+# validation_set = [d for d in validation_set if d.month in [6, 7, 8]]
+validation_set = np.array(validation_set, dtype='datetime64[ns]')
 
 # Load a CFS Reforecast model for comparison
-cfs_model_dir = '%s/../CFSR/reforecast' % root_directory
-cfs = CFSReforecast(root_directory=cfs_model_dir, file_id='dlwp_', fill_hourly=False)
-cfs.set_dates(validation_set)
-cfs.open()
-cfs_ds = cfs.Dataset.isel(lat=(cfs.Dataset.lat >= 0.0))  # Northern hemisphere only
+cfs_model_dir = '%s/CFSR/reforecast' % root_directory
+cfs = CFSReforecast(root_directory=cfs_model_dir, file_id='dlwp_2week_', fill_hourly=False)
+# cfs.set_dates(validation_set)
+# cfs.open()
+cfs_ds = None  # cfs.Dataset.isel(lat=(cfs.Dataset.lat >= 0.0))  # Northern hemisphere only
 
 # Load a barotropic model for comparison
-baro_model_file = '%s/barotropic_2007-2010.nc' % root_directory
-baro_ds = xr.open_dataset(baro_model_file)
-baro_ds = baro_ds.isel(lat=(baro_ds.lat >= 0.0))  # Northern hemisphere only
+baro_model_file = '%s/barotropic_anal_2007-2009.nc' % root_directory
+baro_ds = None  # xr.open_dataset(baro_model_file)
+# baro_ds = baro_ds.isel(lat=(baro_ds.lat >= 0.0))  # Northern hemisphere only
 
 # Number of forward integration weather forecast time steps
-num_forecast_hours = 72
+num_forecast_hours = 336
 dt = 6
 
 # Latitude bounds for MSE calculation
@@ -106,15 +137,15 @@ scale_variables = True
 plot_directory = './Plots'
 plot_example = None  # None to disable or the date index of the sample
 plot_example_f_hour = 24  # Forecast hour index of the sample
-plot_history = False
+plot_history = True
 plot_zonal = False
 plot_mse = True
 plot_spread = False
 plot_mean = False
 method = 'rmse'
 mse_title = r'$Z_{500}$; 2003-2006; 20-70$^{\circ}$N'
-mse_file_name = 'rmse_tau-lstm_avg-fill.pdf'
-mse_pkl_file = 'rmse_tau-lstm_avg-fill.pkl'
+mse_file_name = 'rmse_tau-lstm_relu.pdf'
+mse_pkl_file = 'rmse_tau-lstm_relu.pkl'
 
 
 #%% Pre-processing
@@ -364,9 +395,9 @@ if plot_mse:
         if plot_mean:
             plt.plot(f_hours[0], np.mean(np.array(mse[:len(models)]), axis=0), label='mean', linewidth=2.)
         plt.xlim([0, dt * num_forecast_steps])
-        plt.xticks(np.arange(0, num_forecast_steps * dt + 1, 2 * dt))
-        plt.ylim([0, 140])
-        plt.yticks(np.arange(0, 141, 20))
+        plt.xticks(np.arange(0, num_forecast_steps * dt + 1, 4 * dt))
+        plt.ylim([0, 200])
+        plt.yticks(np.arange(0, 201, 20))
         plt.legend(loc='best', fontsize=8)
         plt.grid(True, color='lightgray', zorder=-100)
         plt.xlabel('forecast hour')

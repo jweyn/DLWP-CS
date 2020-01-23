@@ -25,11 +25,11 @@ from mpl_toolkits.basemap import Basemap
 
 # Data file
 root_directory = '/home/disk/wave2/jweyn/Data/DLWP'
-predictor_file = '%s/cfs_6h_1979-2010_z500_tau300-700.nc' % root_directory
+predictor_file = '%s/cfs_6h_1979-2010_z500-1000_tau_sfc_NH.nc' % root_directory
 
 # Model name
-model = '%s/dlwp_6h_global_tau-lstm_z-tau-out' % root_directory
-model_label = r'$\tau$ LSTM global'
+model = '%s/dlwp_6h_tau-lstm_relu-max1-3x3-sym' % root_directory
+model_label = r'$\tau$ LSTM ReLU 3x3 sym'
 
 # Selection from the predictor file
 input_selection = {'varlev': ['HGT/500', 'THICK/300-700']}
@@ -67,8 +67,8 @@ laplace_range = [-2., 2.]
 laplace_scale = 1.e4 * 9.81 / (2 * 7.29e-5)
 
 # Output file and other small details
-plot_directory = './Plots/tau-lstm-global'
-plot_file_name = 'MAP_tau-lstm-global'
+plot_directory = './Plots/tau-lstm-relu-max1-3x3-sym'
+plot_file_name = 'MAP_tau-lstm-relu-max1-3x3-sym'
 plot_file_type = 'png'
 
 

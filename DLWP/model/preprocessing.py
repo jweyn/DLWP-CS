@@ -14,6 +14,7 @@ import xarray as xr
 import os
 import warnings
 from datetime import datetime
+from ..util import to_bool, insolation
 
 # netCDF fill value
 fill_value = np.array(nc.default_fillvals['f4']).astype(np.float32)
@@ -61,7 +62,7 @@ class Preprocessor(object):
         return (int(np.prod(self.data.predictors.shape[1:-2])),) + self.data.predictors.shape[-2:]
 
     def data_to_samples(self, time_step=1, batch_samples=100, variables='all', levels='all',
-                        pairwise=False, scale_variables=False, chunk_size=64, in_memory=False, to_zarr=False,
+                        pairwise=False, scale_variables=False, chunk_size=1, in_memory=False, to_zarr=False,
                         overwrite=False, verbose=False):
         """
         Convert the data referenced by the data_obj in __init__ to samples ready for ingestion in a DLWP model. Write
@@ -440,7 +441,7 @@ class Preprocessor(object):
         self.data = result_ds
 
     def data_to_series(self, batch_samples=100, variables='all', levels='all', pairwise=False, scale_variables=False,
-                       chunk_size=64, in_memory=False, to_zarr=False, overwrite=False, verbose=False):
+                       chunk_size=1, in_memory=False, to_zarr=False, overwrite=False, verbose=False):
         """
         Convert the data referenced by the data_obj in __init__ to a continuous time series of formatted data. This
         series of data is appropriate for use in a SeriesDataGenerator object during model training. Write data
@@ -506,17 +507,23 @@ class Preprocessor(object):
         # Get the exact dataset we want (index times, variables, and levels)
         all_dates = self.raw_data.dataset_dates
         sel_levels = []
-        for l in levels:
-            if float(l) in self.raw_data.Dataset.level:
-                sel_levels.append(l)
-        ds = self.raw_data.Dataset.sel(time=all_dates, level=list(set(sel_levels)))
+        ds = self.raw_data.Dataset.sel(time=all_dates)
+        try:
+            for l in levels:
+                if float(l) in self.raw_data.Dataset.level:
+                    sel_levels.append(l)
+            ds = ds.sel(level=list(set(sel_levels)))
+        except AttributeError:
+            pass
         if verbose:
             print('Preprocessor.data_to_samples: opening and formatting raw data')
         for v in vars_available:
             if v not in variables:
                 ds = ds.drop(v)
+        lat_dim = 'lat' if 'lat' in ds.dims.keys() else 'latitude'
+        lon_dim = 'lon' if 'lon' in ds.dims.keys() else 'longitude'
         n_sample, n_var, n_level, n_lat, n_lon = (len(all_dates), len(variables), len(levels),
-                                                  ds.dims['lat'], ds.dims['lon'])
+                                                  ds.dims[lat_dim], ds.dims[lon_dim])
         if n_sample < 1:
             raise ValueError('too many time steps for time dimension')
 
@@ -552,14 +559,14 @@ class Preprocessor(object):
                 'long_name': 'Latitude',
                 'units': 'degrees_north'
             })
-            nc_fid.variables['lat'][:] = ds['lat'].values
+            nc_fid.variables['lat'][:] = ds[lat_dim].values
 
             nc_var = nc_fid.createVariable('lon', np.float32, 'lon')
             nc_var.setncatts({
                 'long_name': 'Longitude',
                 'units': 'degrees_east'
             })
-            nc_fid.variables['lon'][:] = ds['lon'].values
+            nc_fid.variables['lon'][:] = ds[lon_dim].values
 
             if pairwise:
                 nc_var = nc_fid.createVariable('varlev', str, 'varlev')
@@ -862,3 +869,106 @@ def std_by_batch(da, batch_size, axis=0, mean=None):
     for b in batches:
         total += np.sum((da.isel(**{dim: slice(b, min(b + batch_size, size))}).values - mean) ** 2.)
     return np.sqrt(total / da.size)
+
+
+def get_constants(constants=None, **kwargs):
+    """
+    Return an array of constants from the files in 'constants'. This latter variable should be an iterable
+    containing length-2 pairs of (file_name, variable_name_in_file). For example, (('land_sea_mask.nc, 'lsm'),).
+    Each variable from the files must have the same shape, and these shapes should match the predictor data to be used
+    in the model training.
+
+    :param constants: iter: iterable of length-2 (file_name, variable_name) pairs
+    :param kwargs: passed to xr.open_dataset() for each file
+    :return: ndarray: array of constants stacked along a new dimension ('channels')
+    """
+    if constants is None:
+        return
+
+    if not hasattr(constants, '__iter__'):
+        raise TypeError("'constants' must be an iterable of length-2 (file_name, variable) pairs")
+    for c in constants:
+        if len(c) != 2:
+            raise ValueError("each element of 'constants' must have length 2 (file_name, variable)")
+
+    result = []
+    for c in constants:
+        ds_c = xr.open_dataset(c[0], **kwargs)
+        result.append(ds_c.variables[c[1]].values)
+    result = np.stack(result, axis=0)
+
+    return result
+
+
+def prepare_data_array(ds, input_sel=None, output_sel=None, add_insolation=False, return_data=True):
+    """
+    Prepare an array of predictor or
+    :param ds:
+    :param input_sel:
+    :param output_sel:
+    :param add_insolation:
+    :param return_data:
+    :return:
+    """
+    input_sel = input_sel or {}
+    output_sel = output_sel or {}
+    try:
+        add_insolation = to_bool(add_insolation)
+    except ValueError:
+        pass
+    assert isinstance(add_insolation, (bool, str))
+    if isinstance(add_insolation, str):
+        assert add_insolation in ['hourly', 'daily']
+    daily_insolation = str(add_insolation) == 'daily'
+
+    if 'time_step' in ds.dims:
+        # Use -1 index because Preprocessor.data_to_samples (which generates a 'time_step' dim), assigns the
+        # datetime 'sample' dim based on the initialization time, time_step=-1
+        da = ds.predictors.isel(time_step=-1)
+    else:
+        da = ds.predictors
+
+    # Check the selections for empty selections
+    if len(input_sel) == 0:
+        if 'varlev' in ds.variables.keys():
+            input_sel = {'varlev': ds['varlev'].values}
+        else:
+            input_sel = {'variable': ds['variable'].values, 'level': ds['level'].values}
+    output_sel = output_sel or {}
+    if len(output_sel) == 0:
+        if 'varlev' in ds.variables.keys():
+            output_sel = {'varlev': ds['varlev'].values}
+        else:
+            output_sel = {'variable': ds['variable'].values, 'level': ds['level'].values}
+
+    # Try to transpose the axes so we can use basic indexing to return views
+    if 'varlev' in input_sel.keys():
+        union = [s for s in input_sel['varlev'] if s in output_sel['varlev']]
+        added_in = [s for s in input_sel['varlev'] if s not in union]
+        added_out = [s for s in output_sel['varlev'] if s not in union]
+        if not return_data or (len(added_in) > 0 and len(added_out) > 0):
+            if not return_data:
+                warnings.warn("To avoid returning values inconsistent with the input data, will not reduce indices "
+                              "to basic indexing.")
+            else:
+                warnings.warn("Found extra variables in both input and output, could not reduce to basic indexing.")
+            input_ind = [int(np.where(ds['varlev'] == v)[0]) for v in input_sel['varlev']]
+            output_ind = [int(np.where(ds['varlev'] == v)[0]) for v in output_sel['varlev']]
+        else:
+            da = da.sel(varlev=union + added_in + added_out)
+            input_ind = slice(0, len(union) + len(added_in))
+            output_ind = slice(0, len(union) + len(added_out))
+    else:
+        raise NotImplementedError("prepare_data_array is not ready for use with variable/level coordinates.")
+
+    # Pre-generate the insolation data
+    if add_insolation:
+        sol = insolation(da.sample.values, ds.lat.values, ds.lon.values, daily=daily_insolation)
+    else:
+        sol = None
+
+    # Return the data if requested
+    if return_data:
+        return da.values, input_ind, output_ind, sol
+    else:
+        return input_ind, output_ind, sol

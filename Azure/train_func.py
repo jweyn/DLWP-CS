@@ -24,7 +24,7 @@ from azureml.core import Run
 from keras.layers import Input, ZeroPadding2D, ZeroPadding3D, Conv2D, ConvLSTM2D, MaxPooling2D, UpSampling2D, \
     Reshape, concatenate
 from DLWP.custom import PeriodicPadding2D, PeriodicPadding3D, RNNResetStates, EarlyStoppingMin, slice_layer, \
-    latitude_weighted_loss, RowConnected2D
+    latitude_weighted_loss, RowConnected2D, RunHistory
 
 from keras.regularizers import l2
 from keras.losses import mean_squared_error
@@ -189,7 +189,7 @@ cs = generator.convolution_shape
 cso = generator.output_convolution_shape
 
 # Convolutional NN
-input_0 = Input(shape=cs, name='input_0')
+input_0 = Input(shape=cs, name='main_input')
 periodic_padding_2 = PeriodicPadding2D(padding=(0, 2), data_format='channels_first')
 zero_padding_2 = ZeroPadding2D(padding=(2, 0), data_format='channels_first')
 periodic_padding_1 = PeriodicPadding2D(padding=(0, 1), data_format='channels_first')

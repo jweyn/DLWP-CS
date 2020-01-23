@@ -5,7 +5,8 @@
 #
 
 """
-Example of training a DLWP model using a dataset of predictors generated with DLWP.model.Preprocessor.
+Example of training a DLWP model using a dataset of predictors generated with DLWP.model.Preprocessor and remapped to
+a cubed sphere with DLWP.remap.CubeSphereRemap.
 """
 
 import time
@@ -26,16 +27,16 @@ from keras.callbacks import History, TensorBoard
 
 # File paths and names
 root_directory = '/home/disk/wave2/jweyn/Data/DLWP'
-predictor_file = os.path.join(root_directory, 'cfs_6h_1979-2010_z500-1000_tau_sfc_NH.nc')
-model_file = os.path.join(root_directory, 'dlwp_6h_tau-lstm_relu-max1')
-log_directory = os.path.join(root_directory, 'logs', 'tau-lstm-relu-max1')
+predictor_file = os.path.join(root_directory, 'cfs_6h_CS48_1979-2010_z500_tau300-700.nc')
+model_file = os.path.join(root_directory, 'dlwp_6h_CS48_tau_relu')
+log_directory = os.path.join(root_directory, 'logs', 'CS48-tau-relu')
 
 # NN parameters. Regularization is applied to LSTM layers by default. weight_loss indicates whether to weight the
 # loss function preferentially in the mid-latitudes.
 model_is_convolutional = True
-model_is_recurrent = True
-min_epochs = 200
-max_epochs = 1000
+model_is_recurrent = False
+min_epochs = 100
+max_epochs = 200
 patience = 50
 batch_size = 64
 lambda_ = 1.e-4
@@ -51,8 +52,6 @@ output_selection = {'varlev': ['HGT/500', 'THICK/300-700']}
 input_time_steps = 2
 output_time_steps = 2
 step_interval = 1
-# Option to crop the north pole. Necessary for getting an even number of latitudes for up-sampling layers.
-crop_north_pole = True
 # Add incoming solar radiation forcing
 add_solar = False
 
@@ -83,9 +82,6 @@ if 'time_step' in data.dims:
 else:
     time_dim = 1
 n_sample = data.dims['sample']
-
-if crop_north_pole:
-    data = data.isel(lat=(data.lat < 90.0))
 
 
 #%% Build a model and the data generators
@@ -118,17 +114,17 @@ else:  # we must have a list of datetimes
 # Build the data generators
 if load_memory or use_keras_fit:
     print('Loading data to memory...')
-generator = SeriesDataGenerator(dlwp, train_data, input_sel=input_selection, output_sel=output_selection,
+generator = SeriesDataGenerator(dlwp, train_data, rank=3, input_sel=input_selection, output_sel=output_selection,
                                 input_time_steps=input_time_steps, output_time_steps=output_time_steps,
                                 batch_size=batch_size, add_insolation=add_solar, load=load_memory, shuffle=shuffle,
                                 interval=step_interval)
 if use_keras_fit:
     p_train, t_train = generator.generate([])
 if validation_data is not None:
-    val_generator = SeriesDataGenerator(dlwp, validation_data, input_sel=input_selection, output_sel=output_selection,
-                                        input_time_steps=input_time_steps, output_time_steps=output_time_steps,
-                                        batch_size=batch_size, add_insolation=add_solar, load=load_memory,
-                                        interval=step_interval)
+    val_generator = SeriesDataGenerator(dlwp, validation_data, rank=3, input_sel=input_selection,
+                                        output_sel=output_selection, input_time_steps=input_time_steps,
+                                        output_time_steps=output_time_steps,batch_size=batch_size,
+                                        add_insolation=add_solar, load=load_memory, interval=step_interval)
     if use_keras_fit:
         val = val_generator.generate([])
 else:
@@ -143,90 +139,59 @@ else:
 cs = generator.convolution_shape
 cso = generator.output_convolution_shape
 layers = (
-    # --- These layers add a convolutional LSTM at the beginning --- #
-    ('PeriodicPadding3D', ((0, 0, 2),), {
+    ('CubeSpherePadding2D', (1,), {
         'data_format': 'channels_first',
         'input_shape': cs
     }),
-    ('ZeroPadding3D', ((0, 2, 0),), {'data_format': 'channels_first'}),
-    ('ConvLSTM2D', (4 * cs[1], 3), {
-        'dilation_rate': 2,
-        'padding': 'valid',
-        'data_format': 'channels_first',
-        'activation': 'linear',
-        'return_sequences': True,
-        'kernel_regularizer': l2(lambda_)
-    }),
-    ('ReLU', (), {'max_value': 1.}),
-    ('Reshape', ((4 * cs[0] * cs[1], cs[2], cs[3]),), None),
-    # -------------------------------------------------------------- #
-    ('PeriodicPadding2D', ((0, 2),), {
-        'data_format': 'channels_first',
-        'input_shape': cs
-    }),
-    ('ZeroPadding2D', ((2, 0),), {'data_format': 'channels_first'}),
-    ('Conv2D', (32, 3), {
-        'dilation_rate': 2,
-        'padding': 'valid',
-        'activation': 'linear',
-        'data_format': 'channels_first'
-    }),
-    ('ReLU', (), {'max_value': 1.}),
-    # ('BatchNormalization', None, {'axis': 1}),
-    ('MaxPooling2D', (2,), {'data_format': 'channels_first'}),
-    ('PeriodicPadding2D', ((0, 1),), {'data_format': 'channels_first'}),
-    ('ZeroPadding2D', ((1, 0),), {'data_format': 'channels_first'}),
-    ('Conv2D', (64, 3), {
+    ('CubeSphereConv2D', (32, 3), {
         'dilation_rate': 1,
         'padding': 'valid',
         'activation': 'linear',
         'data_format': 'channels_first'
     }),
     ('ReLU', (), {'max_value': 1.}),
-    # ('BatchNormalization', None, {'axis': 1}),
-    ('MaxPooling2D', (2,), {'data_format': 'channels_first'}),
-    ('PeriodicPadding2D', ((0, 1),), {'data_format': 'channels_first'}),
-    ('ZeroPadding2D', ((1, 0),), {'data_format': 'channels_first'}),
-    ('Conv2D', (128, 3), {
+    ('MaxPooling3D', ((2, 2, 1),), {'data_format': 'channels_first'}),
+    ('CubeSpherePadding2D', (1,), {'data_format': 'channels_first'}),
+    ('CubeSphereConv2D', (64, 3), {
         'dilation_rate': 1,
         'padding': 'valid',
         'activation': 'linear',
         'data_format': 'channels_first'
     }),
     ('ReLU', (), {'max_value': 1.}),
-    # ('BatchNormalization', None, {'axis': 1}),
-    ('UpSampling2D', (2,), {'data_format': 'channels_first'}),
-    ('PeriodicPadding2D', ((0, 1),), {'data_format': 'channels_first'}),
-    ('ZeroPadding2D', ((1, 0),), {'data_format': 'channels_first'}),
-    ('Conv2D', (64, 3), {
+    ('MaxPooling3D', ((2, 2, 1),), {'data_format': 'channels_first'}),
+    ('CubeSpherePadding2D', (1,), {'data_format': 'channels_first'}),
+    ('CubeSphereConv2D', (128, 3), {
         'dilation_rate': 1,
         'padding': 'valid',
         'activation': 'linear',
         'data_format': 'channels_first'
     }),
     ('ReLU', (), {'max_value': 1.}),
-    # ('BatchNormalization', None, {'axis': 1}),
-    ('UpSampling2D', (2,), {'data_format': 'channels_first'}),
-    ('PeriodicPadding2D', ((0, 2),), {'data_format': 'channels_first'}),
-    ('ZeroPadding2D', ((2, 0),), {'data_format': 'channels_first'}),
-    ('Conv2D', (32, 3), {
-        'dilation_rate': 2,
+    ('UpSampling3D', ((2, 2, 1),), {'data_format': 'channels_first'}),
+    ('CubeSpherePadding2D', (1,), {'data_format': 'channels_first'}),
+    ('CubeSphereConv2D', (64, 3), {
+        'dilation_rate': 1,
         'padding': 'valid',
         'activation': 'linear',
         'data_format': 'channels_first'
     }),
     ('ReLU', (), {'max_value': 1.}),
-    # ('BatchNormalization', None, {'axis': 1}),
-    ('PeriodicPadding2D', ((0, 2),), {'data_format': 'channels_first'}),
-    ('ZeroPadding2D', ((2, 0),), {'data_format': 'channels_first'}),
-    # --- Change the number of filters to cso[0] * cso[1] for LSTM model --- #
-    ('Conv2D', (cso[0] * cso[1], 5), {
+    ('UpSampling3D', ((2, 2, 1),), {'data_format': 'channels_first'}),
+    ('CubeSpherePadding2D', (1,), {'data_format': 'channels_first'}),
+    ('CubeSphereConv2D', (32, 3), {
+        'dilation_rate': 1,
+        'padding': 'valid',
+        'activation': 'linear',
+        'data_format': 'channels_first'
+    }),
+    ('ReLU', (), {'max_value': 1.}),
+    ('CubeSpherePadding2D', (1,), {'data_format': 'channels_first'}),
+    ('CubeSphereConv2D', (cso[0], 3), {
         'padding': 'valid',
         'activation': 'linear',
         'data_format': 'channels_first',
-        # 'return_sequences': True,
-    }),
-    ('Reshape', (cso,), None)
+    })
 )
 
 # Example custom loss function: pass to loss= in build_model()
@@ -260,15 +225,16 @@ print(dlwp.base_model.summary())
 start_time = time.time()
 print('Begin training...')
 history = History()
-early = EarlyStoppingMin(min_epochs=min_epochs, monitor='val_loss' if val_generator is not None else 'loss',
-                         min_delta=0., patience=patience, restore_best_weights=True, verbose=1)
+early = EarlyStoppingMin(monitor='val_loss' if val_generator is not None else 'loss', min_delta=0.,
+                         min_epochs=min_epochs, max_epochs=max_epochs, patience=patience,
+                         restore_best_weights=True, verbose=1)
 tensorboard = TensorBoard(log_dir=log_directory, batch_size=batch_size, update_freq='epoch')
 
 if use_keras_fit:
-    dlwp.fit(p_train, t_train, batch_size=batch_size, epochs=max_epochs, verbose=1, validation_data=val,
+    dlwp.fit(p_train, t_train, batch_size=batch_size, epochs=max_epochs+1, verbose=1, validation_data=val,
              shuffle=shuffle, callbacks=[history, RNNResetStates(), early])
 else:
-    dlwp.fit_generator(generator, epochs=max_epochs, verbose=1, validation_data=val_generator,
+    dlwp.fit_generator(generator, epochs=max_epochs+1, verbose=1, validation_data=val_generator,
                        use_multiprocessing=True, callbacks=[history, RNNResetStates(), early])
 end_time = time.time()
 

@@ -20,7 +20,7 @@ import xarray as xr
 from datetime import datetime
 from DLWP.model import DLWPNeuralNet, SeriesDataGenerator
 from DLWP.util import save_model, train_test_split_ind
-from DLWP.custom import RNNResetStates, EarlyStoppingMin, latitude_weighted_loss, RunHistory
+from DLWP.custom import RNNResetStates, EarlyStoppingMin, latitude_weighted_loss, RunHistory, anomaly_correlation_loss
 from keras.regularizers import l2
 from keras.losses import mean_squared_error
 from keras.callbacks import TensorBoard
@@ -70,6 +70,7 @@ patience = 50
 batch_size = 64
 lambda_ = 1.e-4
 weight_loss = False
+acc_loss = False
 shuffle = True
 
 # Data parameters. Specify the input variables/levels, output variables/levels, and time steps in/out. Note that for
@@ -77,8 +78,9 @@ shuffle = True
 # Ensure that the selections use LISTS of values (even for only 1) to keep dimensions correct.
 input_selection = {'varlev': ['HGT/500', 'THICK/300-700']}
 output_selection = {'varlev': ['HGT/500', 'THICK/300-700']}
-input_time_steps = 2
-output_time_steps = 2
+input_time_steps = 1
+output_time_steps = 1
+step_interval = 6
 # Option to crop the north pole. Necessary for getting an even number of latitudes for up-sampling layers.
 crop_north_pole = True
 # Add incoming solar radiation forcing
@@ -168,13 +170,15 @@ if load_memory or use_keras_fit:
     print('Loading data to memory...')
 generator = SeriesDataGenerator(dlwp, train_data, input_sel=input_selection, output_sel=output_selection,
                                 input_time_steps=input_time_steps, output_time_steps=output_time_steps,
-                                batch_size=batch_size, add_insolation=add_solar, load=load_memory, shuffle=shuffle)
+                                batch_size=batch_size, add_insolation=add_solar, load=load_memory, shuffle=shuffle,
+                                interval=step_interval)
 if use_keras_fit:
     p_train, t_train = generator.generate([])
 if validation_data is not None:
     val_generator = SeriesDataGenerator(dlwp, validation_data, input_sel=input_selection, output_sel=output_selection,
                                         input_time_steps=input_time_steps, output_time_steps=output_time_steps,
-                                        batch_size=batch_size, add_insolation=add_solar, load=load_memory)
+                                        batch_size=batch_size, add_insolation=add_solar, load=load_memory,
+                                        interval=step_interval)
     if use_keras_fit:
         val = val_generator.generate([])
 else:
@@ -339,11 +343,19 @@ layers = (
 # )
 
 # Example custom loss function: pass to loss= in build_model()
-if weight_loss:
-    loss_function = latitude_weighted_loss(mean_squared_error, generator.ds.lat.values,
-                                           generator.output_convolution_shape, axis=-2, weighting='midlatitude')
+if acc_loss:
+    # Generate the data to fit the scaler. The generator will by default apply scaling because it is necessary
+    # to automate its use in the Keras fit_generator method, so disable it when dealing with data to fit the scaler
+    print('Finding climatology for ACC loss...')
+    p_fit, t_fit = generator.generate([], scale_and_impute=False)
+    climo = t_fit.mean(axis=0, keepdims=True)
+    p_fit, t_fit = (None, None)
+    loss_function = anomaly_correlation_loss(climo, regularize_mean='mse', reverse=True)
 else:
-    loss_function = 'mse'
+    loss_function = mean_squared_error
+if weight_loss:
+    loss_function = latitude_weighted_loss(loss_function, generator.ds.lat.values, generator.convolution_shape,
+                                           axis=-2, weighting='midlatitude')
 
 # Build the model
 try:
@@ -353,18 +365,6 @@ except (ValueError, IndexError):
         print(layer.name, layer.output_shape)
     raise
 print(dlwp.base_model.summary())
-
-
-#%% Initialize the scaler/imputer if necessary
-
-# Generate the data to fit the scaler and imputer. The generator will by default apply scaling because it is necessary
-# to automate its use in the Keras fit_generator method, so disable it when dealing with data to fit the scaler and
-# imputer. If using pre-scaled data (i.e., dlwp was initialized with scaler_type=None and the Preprocessor data was
-# generated with scale_variables=True), this step should be omitted.
-fit_set = list(range(2))  # Use a much larger value when it matters
-p_fit, t_fit = generator.generate(fit_set, scale_and_impute=False)
-dlwp.init_fit(p_fit, t_fit)
-p_fit, t_fit = (None, None)
 
 
 #%% Train, evaluate, and save the model

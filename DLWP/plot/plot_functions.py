@@ -11,7 +11,7 @@ a bit cleaner to place them here than have plotting functions defined in every u
 
 import numpy as np
 from matplotlib import pyplot as plt
-from .util import remove_chars
+from ..util import remove_chars
 
 
 def plot_basemap(basemap, lon, lat, z=None, plot_type='contourf', plot_kwargs=None,
@@ -244,7 +244,7 @@ def forecast_example_plot(base, verif, forecast, f_hour, model_name='', plot_dif
     return fig
 
 
-def zonal_mean_plot(obs_mean, obs_std, pred_mean, pred_std, f_hour, model_name='', out_directory=None):
+def zonal_mean_plot(obs_mean, obs_std, pred_mean, pred_std, f_day, model_name='', var_name='', out_directory=None):
     """
     Plot the zonal mean and standard deviation of observed and predicted forecast states.
 
@@ -252,8 +252,9 @@ def zonal_mean_plot(obs_mean, obs_std, pred_mean, pred_std, f_hour, model_name='
     :param obs_std: 1d DataArray with dimension 'lat': observed zonal std
     :param pred_mean: 1d DataArray with dimension 'lat': forecast zonal mean
     :param pred_std: 1d DataArray with dimension 'lat': forecast zonal std
-    :param f_hour: int: forecast hour of the prediction
+    :param f_day: int: forecast day of the prediction
     :param model_name: str: name of the model
+    :param var_name: str: name of variable on the x-axis
     :param out_directory: str: if not None, save the figure to this directory
     :return:
     """
@@ -264,11 +265,11 @@ def zonal_mean_plot(obs_mean, obs_std, pred_mean, pred_std, f_hour, model_name='
     plt.fill_betweenx(pred_mean.lat, pred_mean - pred_std, pred_mean + pred_std,
                       facecolor='C1', zorder=-40, alpha=0.3)
     plt.plot(obs_mean, obs_mean.lat, label='observed', color='C0')
-    plt.plot(pred_mean, pred_mean.lat, label='%d-hour prediction' % f_hour, color='C1')
+    plt.plot(pred_mean, pred_mean.lat, label='%d-day prediction' % f_day, color='C1')
     plt.legend(loc='best')
     plt.grid(True, color='lightgray', zorder=-100)
-    plt.xlabel('zonal mean height')
-    plt.ylabel('latitude')
-    plt.ylim([0., 90.])
+    plt.xlabel('Zonal mean %s' % var_name)
+    plt.ylabel('Latitude')
+    plt.ylim([-90., 90.])
     plt.savefig('%s/%s_zonal_climo.pdf' % (out_directory, remove_chars(model_name)), bbox_inches='tight')
     plt.show()

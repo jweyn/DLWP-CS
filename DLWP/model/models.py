@@ -424,6 +424,9 @@ class DLWPFunctional(object):
         :param kwargs: passed to Keras 'predict' method
         :return ndarray: model prediction; first dim is time
         """
+        if isinstance(predictors, (list, tuple)):
+            raise NotImplementedError('DLWPFunctional.predict_timeseries cannot use extra inputs at the moment. '
+                                      'Use TimeSeriesEstimator instead.')
         time_steps = int(time_steps)
         if time_steps < 1:
             raise ValueError("time_steps must be an int > 0")

@@ -10,6 +10,7 @@ DLWP utilities.
 
 import pickle
 import random
+import re
 import tempfile
 from importlib import import_module
 from copy import copy
@@ -302,7 +303,7 @@ def day_of_year(date):
     return (date - year_start).total_seconds() / 3600. / 24.
 
 
-def insolation(dates, lat, lon, S=1.):
+def insolation(dates, lat, lon, S=1., daily=False):
     """
     Calculate the approximate solar insolation for given dates
 
@@ -310,19 +311,21 @@ def insolation(dates, lat, lon, S=1.):
     :param lat: 1d or 2d array of latitudes
     :param lon: 1d or 2d array of longitudes (0-360º). If 2d, must match the shape of lat.
     :param S: float: scaling factor (solar constant)
+    :param daily: bool: if True, return the daily max solar radiation (lat and day of year dependent only)
     :return: 3d array: insolation (date, lat, lon)
     """
     try:
         assert len(lat.shape) == len(lon.shape)
     except AssertionError:
         raise ValueError("'lat' and 'lon' must either both be 1d or both be 2d'")
-    if len(lat.shape) == 2:
+    if len(lat.shape) >= 2:
         try:
             assert lat.shape == lon.shape
         except AssertionError:
             raise ValueError("shape mismatch between lat (%s) and lon (%s)" % (lat.shape, lon.shape))
     if len(lat.shape) == 1:
         lon, lat = np.meshgrid(lon, lat)
+    n_dim = len(lat.shape)
 
     # Constants for year 1995 (standard)
     eps = 23.4441 * np.pi / 180.
@@ -332,21 +335,30 @@ def insolation(dates, lat, lon, S=1.):
     # Get the day of year. Ignore leap days.
     days = pd.Series(dates)
     days = days.apply(day_of_year)
+    days_arr = days.values.copy().astype(np.float32)
+    for d in range(n_dim):
+        days_arr = np.expand_dims(days_arr, -1)
+    # For daily max values, set the day to 0.5 and the longitude everywhere to 0 (this is approx noon)
+    if daily:
+        days_arr = 0.5 + np.round(days_arr)
+        new_lon = lon.copy().astype(np.float32)
+        new_lon[:] = 0.
+    else:
+        new_lon = lon.astype(np.float32)
     # Longitude of the earth relative to the orbit, 1st order approximation
     lambda_m0 = ecc * (1. + beta) * np.sin(om)
-    lambda_m = lambda_m0 + 2. * np.pi * (days.values - 80.5) / 365.
+    lambda_m = lambda_m0 + 2. * np.pi * (days_arr - 80.5) / 365.
     lambda_ = lambda_m + 2. * ecc * np.sin(lambda_m - om)
     # Solar declination
     dec = np.arcsin(np.sin(eps) * np.sin(lambda_))
     # Hour angle
-    h = 2 * np.pi * (days.values[:, None, None] + lon / 360.)
+    h = 2 * np.pi * (days_arr + new_lon / 360.)
     # Distance
     rho = (1. - ecc ** 2.) / (1. + ecc * np.cos(lambda_ - om))
 
     # Insolation
-    lat *= np.pi / 180.
-    sol = S * (np.sin(lat[None, ...]) * np.sin(dec[:, None, None]) -
-               np.cos(lat[None, ...]) * np.cos(dec[:, None, None]) * np.cos(h)) * rho[:, None, None] ** -2.
+    sol = S * (np.sin(np.pi / 180. * lat[None, ...]) * np.sin(dec) -
+               np.cos(np.pi / 180. * lat[None, ...]) * np.cos(dec) * np.cos(h)) * rho ** -2.
     sol[sol < 0.] = 0.
 
     return sol.astype(np.float32)
@@ -368,3 +380,52 @@ def to_chunked_dataset(ds, chunking):
         ds_new[var].encoding['original_shape'] = ds_new[var].shape
         ds_new[var].encoding['chunksizes'] = tuple([c[0] for c in ds_new[var].chunks])
     return ds_new
+
+
+def to_bool(x):
+    """Convert an object to boolean.
+
+    Examples:
+    >>> print to_bool('TRUE')
+    True
+    >>> print to_bool(True)
+    True
+    >>> print to_bool(1)
+    True
+    >>> print to_bool('FALSE')
+    False
+    >>> print to_bool(False)
+    False
+    >>> print to_bool(0)
+    False
+    >>> print to_bool('Foo')
+    Traceback (most recent call last):
+    ValueError: Unknown boolean specifier: 'Foo'.
+    >>> print to_bool(None)
+    Traceback (most recent call last):
+    ValueError: Unknown boolean specifier: 'None'.
+
+    This function (c) Tom Keffer, weeWX.
+    """
+    try:
+        if x.lower() in ['true', 'yes']:
+            return True
+        elif x.lower() in ['false', 'no']:
+            return False
+    except AttributeError:
+        pass
+    try:
+        return bool(int(x))
+    except (ValueError, TypeError):
+        pass
+    raise ValueError("Unknown boolean specifier: '%s'." % x)
+
+
+def remove_chars(s):
+    """
+    Remove characters from a string that have unintended effects on file paths.
+
+    :param s: str
+    :return: str
+    """
+    return ''.join(re.split('[$/\\\\]', s))
