@@ -17,44 +17,44 @@ from datetime import datetime
 from DLWP.model import DLWPFunctional, ArrayDataGenerator
 from DLWP.model.preprocessing import get_constants, prepare_data_array
 from DLWP.util import save_model
-from keras.callbacks import History, TensorBoard
+from tensorflow.keras.callbacks import History, TensorBoard
 
-from keras.layers import Input, MaxPooling3D, UpSampling3D, AveragePooling3D, concatenate, ReLU, Reshape, Concatenate
+from tensorflow.keras.layers import Input, MaxPooling3D, UpSampling3D, AveragePooling3D, concatenate, ReLU, Reshape, \
+    Concatenate
 from DLWP.custom import CubeSpherePadding2D, CubeSphereConv2D, RNNResetStates, EarlyStoppingMin, SaveWeightsOnEpoch
-from keras.models import Model
-import keras.backend as K
+from tensorflow.keras.models import Model
 
 # Set a TF session with memory growth
 import tensorflow as tf
 from tensorflow.keras.optimizers import Adam
-config = tf.ConfigProto()
-config.gpu_options.allow_growth = True
-# config.gpu_options.visible_device_list = '1'
-K.set_session(tf.Session(config=config))
+# config = tf.compat.v1.ConfigProto()
+# config.gpu_options.allow_growth = True
+# # config.gpu_options.visible_device_list = '1'
+# tf.compat.v1.keras.backend.set_session(tf.compat.v1.Session(config=config))
 
 
 #%% Parameters
 
 # File paths and names
-root_directory = '/home/gold/jweyn/Data'
-predictor_file = os.path.join(root_directory, 'era5_2deg_3h_CS_1979-2018_z-tau-t2_500-1000_tcwv_psi850.nc')
+root_directory = '/media/jojo/Blue/Data/DLWP'
+predictor_file = os.path.join(root_directory, 'era5_2deg_3h_CS_2013_z-tau-t2_500-1000_tcwv_psi850.nc')
 model_file = os.path.join(root_directory, 'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2-64-relumax')
 log_directory = os.path.join(root_directory, 'logs', 'era5_6h-3_CS48_tau-sfc1000-lsm_UNET2-64-relumax')
 reverse_lat = False
 
 # Optional paths to files containing constant fields to add to the inputs
 constant_fields = [
-    (os.path.join(root_directory, 'era5_2deg_3h_CS_land_sea_mask.nc'), 'lsm'),
-    (os.path.join(root_directory, 'era5_2deg_3h_CS_scaled_topo.nc'), 'z')
+    # (os.path.join(root_directory, 'era5_2deg_3h_CS_land_sea_mask.nc'), 'lsm'),
+    # (os.path.join(root_directory, 'era5_2deg_3h_CS_scaled_topo.nc'), 'z')
 ]
 
 # Parameters for the CNN
 cnn_model_name = 'unet2'
-base_filter_number = 64
+base_filter_number = 32
 min_epochs = 100
 max_epochs = 1000
 patience = 50
-batch_size = 32
+batch_size = 16
 loss_by_step = None
 shuffle = True
 independent_north_pole = False
@@ -86,7 +86,7 @@ use_keras_fit = False
 # pandas datetime objects. The train set can be set to the first <integer> samples, an iterable of dates, or None to
 # simply use the remaining points. Match the type of validation_set.
 validation_set = list(pd.date_range(datetime(2013, 1, 1, 0), datetime(2013, 2, 28, 18), freq='3H'))
-train_set = list(pd.date_range(datetime(1979, 1, 1, 0), datetime(1979, 12, 31, 18), freq='3H'))
+train_set = list(pd.date_range(datetime(2013, 1, 1, 0), datetime(2013, 12, 31, 18), freq='3H'))
 
 
 #%% Open data
@@ -403,7 +403,7 @@ history = History()
 early = EarlyStoppingMin(monitor='val_loss' if val_generator is not None else 'loss', min_delta=0.,
                          min_epochs=min_epochs, max_epochs=max_epochs, patience=patience,
                          restore_best_weights=True, verbose=1)
-tensorboard = TensorBoard(log_dir=log_directory, batch_size=batch_size, update_freq='epoch')
+tensorboard = TensorBoard(log_dir=log_directory, update_freq='epoch')
 save = SaveWeightsOnEpoch(weights_file=model_file + '.keras.tmp', interval=25)
 
 if use_keras_fit:

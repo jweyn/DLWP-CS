@@ -8,11 +8,9 @@
 High-level APIs for building a DLWP model based on Keras and scikit-learn.
 """
 
-import keras
-import keras.layers
 import numpy as np
-import keras.models
-from keras.utils import multi_gpu_model
+from tensorflow.keras import models
+from tensorflow.keras.utils import multi_gpu_model
 
 from .generators import DataGenerator, SmartDataGenerator, SeriesDataGenerator
 from .. import util
@@ -75,7 +73,7 @@ class DLWPNeuralNet(object):
             raise TypeError("'gpus' argument must be an int")
         if type(layers) not in [list, tuple]:
             raise TypeError("'layers' argument must be a tuple")
-        layers = [l for l in layers]
+        layers = list(layers)
         for l, layer in enumerate(layers):
             if type(layer) not in [list, tuple]:
                 raise TypeError("each element of 'layers' must be a tuple")
@@ -93,10 +91,10 @@ class DLWPNeuralNet(object):
         # Self-explanatory
         util.make_keras_picklable()
         # Build a model, either on a single GPU or on a CPU to control multiple GPUs
-        self.base_model = keras.models.Sequential()
-        for l, layer in enumerate(layers):
+        self.base_model = models.Sequential()
+        for layer in layers:
             try:
-                layer_class = util.get_from_class('keras.layers', layer[0])
+                layer_class = util.get_from_class('tensorflow.keras.layers', layer[0])
             except (ImportError, AttributeError):
                 # Maybe we've defined a custom layer, which would be in DLWP.custom
                 layer_class = util.get_from_class('DLWP.custom', layer[0])
@@ -104,7 +102,7 @@ class DLWPNeuralNet(object):
         if gpus > 1:
             import tensorflow as tf
             with tf.device('/cpu:0'):
-                self.base_model = keras.models.clone_model(self.base_model)
+                self.base_model = models.clone_model(self.base_model)
             self.model = multi_gpu_model(self.base_model, gpus=gpus)
             self.gpus = gpus
         else:
@@ -365,7 +363,7 @@ class DLWPFunctional(object):
         if gpus > 1:
             import tensorflow as tf
             with tf.device('/cpu:0'):
-                self.base_model = keras.models.clone_model(self.base_model)
+                self.base_model = models.clone_model(self.base_model)
             self.model = multi_gpu_model(self.base_model, gpus=gpus)
             self.gpus = gpus
         else:

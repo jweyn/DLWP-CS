@@ -8,23 +8,22 @@
 Custom Keras and PyTorch classes.
 """
 
-from keras import backend as K
-from keras.callbacks import Callback, EarlyStopping
-from keras.layers.convolutional import ZeroPadding2D, ZeroPadding3D
-from keras.layers.local import LocallyConnected2D
-from keras.layers import Lambda, Layer
-from keras.losses import mean_absolute_error, mean_squared_error
-from keras.utils import conv_utils
-from keras.engine.base_layer import InputSpec
-from keras import activations, initializers, regularizers, constraints
-import numpy as np
 import tensorflow as tf
+from tensorflow.compat.v1 import keras as tfk
+from tensorflow.keras.callbacks import Callback, EarlyStopping
+from tensorflow.keras.layers import ZeroPadding2D, ZeroPadding3D, LocallyConnected2D, Lambda, Layer
+from tensorflow.keras.losses import mean_absolute_error, mean_squared_error
+from tensorflow.python.keras.utils import conv_utils
+from tensorflow.python.keras.engine.base_layer import InputSpec
+from tensorflow.keras import activations, initializers, regularizers, constraints
+import numpy as np
 
 try:
     from s2cnn import S2Convolution, SO3Convolution
 except ImportError:
     pass
 
+K = tfk.backend
 
 # ==================================================================================================================== #
 # Keras utility classes
@@ -816,7 +815,7 @@ class CubeSphereConv2D(Layer):
         self.kernel_size = conv_utils.normalize_tuple(kernel_size, 2, 'kernel_size')
         self.strides = conv_utils.normalize_tuple(strides, 2, 'strides')
         self.padding = conv_utils.normalize_padding(padding)
-        self.data_format = K.normalize_data_format(data_format)
+        self.data_format = conv_utils.normalize_data_format(data_format)
         if self.data_format != 'channels_first':
             raise ValueError("CubeSphereConv2D must have 'channels_first' order")
         self.dilation_rate = conv_utils.normalize_tuple(dilation_rate, 2, 'dilation_rate')
@@ -1042,7 +1041,7 @@ class CubeSpherePadding2D(ZeroPadding3D):
                  padding=1,
                  data_format='channels_first',
                  **kwargs):
-        data_format = K.normalize_data_format(data_format)
+        data_format = conv_utils.normalize_data_format(data_format)
         if data_format != 'channels_first':
             raise ValueError("CubeSpherePadding2D must have 'channels_first' order")
         super(CubeSpherePadding2D, self).__init__(padding=padding,

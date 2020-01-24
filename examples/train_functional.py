@@ -16,16 +16,16 @@ import xarray as xr
 from datetime import datetime
 from DLWP.model import DLWPFunctional, SeriesDataGenerator
 from DLWP.util import save_model, train_test_split_ind
-from keras.callbacks import History, TensorBoard
+from tensorflow.keras.callbacks import History, TensorBoard
 
-from keras.layers import Input, ZeroPadding2D, ZeroPadding3D, Conv2D, ConvLSTM2D, MaxPooling2D, UpSampling2D, \
-    Reshape, concatenate
+from tensorflow.keras.layers import Input, ZeroPadding2D, ZeroPadding3D, Conv2D, ConvLSTM2D, MaxPooling2D, \
+    UpSampling2D, Reshape, concatenate
 from DLWP.custom import PeriodicPadding2D, PeriodicPadding3D, RNNResetStates, EarlyStoppingMin, slice_layer, \
     latitude_weighted_loss, RowConnected2D
 
-from keras.regularizers import l2
-from keras.losses import mean_squared_error
-from keras.models import Model
+from tensorflow.keras.regularizers import l2
+from tensorflow.keras.losses import mean_squared_error
+from tensorflow.keras.models import Model
 
 
 #%% Parameters

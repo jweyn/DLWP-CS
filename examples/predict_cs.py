@@ -23,11 +23,10 @@ from DLWP.remap import CubeSphereRemap
 
 # Set a TF session with memory growth
 import tensorflow as tf
-import keras.backend as K
-config = tf.ConfigProto()
+config = tf.compat.v1.ConfigProto()
 config.gpu_options.allow_growth = True
 config.gpu_options.visible_device_list = '1'
-K.set_session(tf.Session(config=config))
+tf.compat.v1.keras.backend.set_session(tf.compat.v1.Session(config=config))
 
 
 #%% User parameters

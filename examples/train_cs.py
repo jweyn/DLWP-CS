@@ -18,9 +18,9 @@ from datetime import datetime
 from DLWP.model import DLWPNeuralNet, SeriesDataGenerator
 from DLWP.util import save_model, train_test_split_ind
 from DLWP.custom import RNNResetStates, EarlyStoppingMin, latitude_weighted_loss, anomaly_correlation_loss
-from keras.regularizers import l2
-from keras.losses import mean_squared_error
-from keras.callbacks import History, TensorBoard
+
+from tensorflow.keras.losses import mean_squared_error
+from tensorflow.keras.callbacks import History, TensorBoard
 
 
 #%% Parameters
