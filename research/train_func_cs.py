@@ -17,20 +17,20 @@ from datetime import datetime
 from DLWP.model import DLWPFunctional, ArrayDataGenerator
 from DLWP.model.preprocessing import get_constants, prepare_data_array
 from DLWP.util import save_model
-from keras.callbacks import History, TensorBoard
+from tensorflow.keras.callbacks import History, TensorBoard
 
-from keras.layers import Input, UpSampling3D, AveragePooling3D, concatenate, ReLU, Reshape, Concatenate, Permute
+from tensorflow.keras.layers import Input, UpSampling3D, AveragePooling3D, concatenate, ReLU, Reshape, Concatenate, \
+    Permute
 from DLWP.custom import CubeSpherePadding2D, CubeSphereConv2D, RNNResetStates, EarlyStoppingMin, SaveWeightsOnEpoch
-from keras.models import Model
-import keras.backend as K
+from tensorflow.keras.models import Model
 
 # Set a TF session with memory growth
 import tensorflow as tf
 from tensorflow.keras.optimizers import Adam
-config = tf.ConfigProto()
-config.gpu_options.allow_growth = True
-# config.gpu_options.visible_device_list = '1'
-K.set_session(tf.Session(config=config))
+# config = tf.compat.v1.ConfigProto()
+# config.gpu_options.allow_growth = True
+# # config.gpu_options.visible_device_list = '1'
+# tf.compat.v1.keras.backend.set_session(tf.compat.v1.Session(config=config))
 
 
 #%% Parameters
@@ -85,8 +85,8 @@ use_keras_fit = False
 # Validation set to use. Either an integer (number of validation samples, taken from the end), or an iterable of
 # pandas datetime objects. The train set can be set to the first <integer> samples, an iterable of dates, or None to
 # simply use the remaining points. Match the type of validation_set.
-validation_set = list(pd.date_range(datetime(2013, 1, 1, 0), datetime(2016, 12, 31, 18), freq='3H'))
-train_set = list(pd.date_range(datetime(1979, 1, 1, 6), datetime(2012, 12, 31, 18), freq='3H'))
+validation_set = list(pd.date_range(datetime(2013, 1, 1, 0), datetime(2013, 2, 28, 18), freq='3H'))
+train_set = list(pd.date_range(datetime(1979, 1, 1, 0), datetime(1979, 12, 31, 18), freq='3H'))
 
 
 #%% Open data
@@ -403,7 +403,7 @@ history = History()
 early = EarlyStoppingMin(monitor='val_loss' if val_generator is not None else 'loss', min_delta=0.,
                          min_epochs=min_epochs, max_epochs=max_epochs, patience=patience,
                          restore_best_weights=True, verbose=1)
-tensorboard = TensorBoard(log_dir=log_directory, batch_size=batch_size, update_freq='epoch')
+tensorboard = TensorBoard(log_dir=log_directory, update_freq='epoch')
 save = SaveWeightsOnEpoch(weights_file=model_file + '.keras.tmp', interval=25)
 
 if use_keras_fit:

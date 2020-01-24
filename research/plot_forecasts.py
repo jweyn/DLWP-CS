@@ -12,7 +12,7 @@ from DLWP.model import DataGenerator
 from DLWP.model import verify
 from DLWP.util import load_model
 from DLWP.data import CFSReforecast
-import keras.backend as K
+import tensorflow.keras.backend as K
 import numpy as np
 import pandas as pd
 import xarray as xr

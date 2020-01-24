@@ -8,11 +8,6 @@
 Example of training a DLWP model on the cubed sphere with the Keras functional API.
 """
 
-import tensorflow as tf
-print(tf.__version__)
-import keras
-print(keras.__version__)
-
 import argparse
 import os
 import shutil
@@ -24,21 +19,22 @@ from datetime import datetime
 from DLWP.model import DLWPFunctional, ArrayDataGenerator
 from DLWP.model.preprocessing import get_constants, prepare_data_array
 from DLWP.util import save_model
-from keras.callbacks import TensorBoard
+from tensorflow.keras.callbacks import TensorBoard
 from azureml.core import Run
 
-from keras.layers import Input, UpSampling3D, AveragePooling3D, concatenate, ReLU, Reshape, Concatenate, Permute
+from tensorflow.keras.layers import Input, UpSampling3D, AveragePooling3D, concatenate, ReLU, Reshape, Concatenate, \
+    Permute
 from DLWP.custom import CubeSpherePadding2D, CubeSphereConv2D, RNNResetStates, EarlyStoppingMin, \
     RunHistory, SaveWeightsOnEpoch
-from keras.models import Model
-import keras.backend as K
+from tensorflow.keras.models import Model
 
 # Set a TF session with memory growth
 import tensorflow as tf
-config = tf.ConfigProto()
+print(tf.__version__)
+config = tf.compat.v1.ConfigProto()
 config.gpu_options.allow_growth = True
 # config.gpu_options.visible_device_list = '1'
-K.set_session(tf.Session(config=config))
+tf.compat.v1.keras.backend.set_session(tf.compat.v1.Session(config=config))
 
 
 #%% Parse user arguments
@@ -63,7 +59,7 @@ if args.temp_dir != 'None':
 
 if args.seed >= 0:
     np.random.seed(args.seed)
-    tf.set_random_seed(args.seed)
+    tf.compat.v1.set_random_seed(args.seed)
 
 
 #%% Parameters

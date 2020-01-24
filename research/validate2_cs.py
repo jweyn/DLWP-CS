@@ -8,7 +8,7 @@
 Simple routines for graphically evaluating the performance of a DLWP model on the cubed sphere.
 """
 
-import keras.backend as K
+import tensorflow as tf
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -27,11 +27,10 @@ from DLWP.util import load_model, train_test_split_ind, remove_chars, is_channel
 from DLWP.remap import CubeSphereRemap
 
 # Set a TF session with memory growth
-import tensorflow as tf
-config = tf.ConfigProto()
+config = tf.compat.v1.ConfigProto()
 config.gpu_options.allow_growth = True
 config.gpu_options.visible_device_list = '1'
-K.set_session(tf.Session(config=config))
+tf.compat.v1.keras.backend.set_session(tf.compat.v1.Session(config=config))
 
 
 #%% User parameters
@@ -377,7 +376,7 @@ for m, model in enumerate(models):
     # Clear the model
     dlwp = None
     time_series = None
-    # K.clear_session()
+    # tf.compat.v1.keras.backend.clear_session()
 
 
 #%% Add an extra model

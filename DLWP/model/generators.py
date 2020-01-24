@@ -12,7 +12,7 @@ fit_generator() methods.
 import warnings
 import numpy as np
 import xarray as xr
-from keras.utils import Sequence
+from tensorflow.keras.utils import Sequence
 from ..util import delete_nan_samples, insolation, to_bool
 
 
