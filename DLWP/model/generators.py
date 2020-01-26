@@ -333,7 +333,7 @@ class SeriesDataGenerator(Sequence):
 
     def __init__(self, model, ds, rank=2, input_sel=None, output_sel=None, input_time_steps=1, output_time_steps=1,
                  sequence=None, interval=1, add_insolation=False, batch_size=32, shuffle=False, remove_nan=True,
-                 load='required', delay_load=False, constants=None):
+                 load='required', delay_load=False, constants=None, channels_last=False):
         """
         Initialize a SeriesDataGenerator.
 
@@ -371,6 +371,8 @@ class SeriesDataGenerator(Sequence):
         :param delay_load: if True, delay the loading of the data until the first call to generate()
         :param constants: ndarray: additional constant fields to add to each input. Must match the spatial dimensions
             (last `rank` dimensions) of the input data.
+        :param channels_last: bool: if True, returns data with channels as the last dimension. May slow down processing
+            of data, but may speed up GPU operations on the data.
         """
         self.model = model
         if not hasattr(ds, 'predictors'):
@@ -461,6 +463,14 @@ class SeriesDataGenerator(Sequence):
                 raise ValueError('spatial dimensions of constants must be the same as input data; got %s and %s' %
                                  (self.constants.shape[-self.rank:], self.shape[-self.rank:]))
 
+        # Transpose option
+        self.channels_last = to_bool(channels_last)
+        self._time_transpose = (0, 1,) + tuple(range(3, 3 + self.rank)) + (2,)
+        if self._keep_time_axis:
+            self._transpose = self._time_transpose
+        else:
+            self._transpose = (0,) + tuple(range(2, 2 + self.rank)) + (1,)
+
     def _load_data(self):
         if not(not self._load):
             print('SeriesDataGenerator: loading data to memory')
@@ -527,11 +537,19 @@ class SeriesDataGenerator(Sequence):
             (time_step, channels, y, x); if not, (channels, y, x). Includes insolation.
         """
         if self._keep_time_axis:
-            return (self._input_time_steps,) + (int(np.prod(self.shape[1:-self.rank])) + self._add_insolation,)\
+            result = (self._input_time_steps,) + (int(np.prod(self.shape[1:-self.rank])) + self._add_insolation,)\
                 + self.shape[-self.rank:]
+            if self.channels_last:
+                return tuple([result[s - 1] for s in self._time_transpose[1:]])
+            else:
+                return result
         else:
-            return (int(np.prod(self.shape[:-self.rank])) +
-                    self._input_time_steps * self._add_insolation,) + self.shape[-self.rank:]
+            result = (int(np.prod(self.shape[:-self.rank])) +
+                      self._input_time_steps * self._add_insolation,) + self.shape[-self.rank:]
+            if self.channels_last:
+                return tuple([result[s-1] for s in self._transpose[1:]])
+            else:
+                return result
 
     @property
     def shape_2d(self):
@@ -578,10 +596,18 @@ class SeriesDataGenerator(Sequence):
             recurrent, (time_step, channels, y, x); if not, (channels, y, x).
         """
         if self._keep_time_axis:
-            return (self._output_time_steps,) + (int(np.prod(self.output_shape[1:-self.rank])),) \
+            result = (self._output_time_steps,) + (int(np.prod(self.output_shape[1:-self.rank])),) \
                 + self.output_shape[-self.rank:]
+            if self.channels_last:
+                return tuple([result[s-1] for s in self._time_transpose[1:]])
+            else:
+                return result
         else:
-            return (int(np.prod(self.output_shape[:-self.rank])),) + self.shape[-self.rank:]
+            result = (int(np.prod(self.output_shape[:-self.rank])),) + self.shape[-self.rank:]
+            if self.channels_last:
+                return tuple([result[s-1] for s in self._transpose[1:]])
+            else:
+                return result
 
     @property
     def output_shape_2d(self):
@@ -600,10 +626,12 @@ class SeriesDataGenerator(Sequence):
     def insolation_shape(self):
         """
         :return: the shape of insolation inputs in steps 1- of an input sequence, or None if add_insolation is False.
-            Note that it always includes the time step dimension, but no channels dimension. The network needs to
-            accommodate this.
+            Note that it always includes the time step dimension. The network needs to accommodate this.
         """
-        return tuple((self._input_time_steps, 1) + self.convolution_shape[-self.rank:])
+        if self.channels_last:
+            return tuple((self._input_time_steps,) + self.convolution_shape[:self.rank]) + (1,)
+        else:
+            return tuple((self._input_time_steps, 1) + self.convolution_shape[-self.rank:])
 
     def on_epoch_end(self):
         self._indices = np.arange(self._n_sample)
@@ -624,13 +652,6 @@ class SeriesDataGenerator(Sequence):
         p = np.concatenate([self.input_da.values[samples + n * self._interval, np.newaxis]
                             for n in range(self._input_time_steps)], axis=1)
         if self._add_insolation:
-            # Pretend like we have no insolation and keep the time axis
-            self._add_insolation = False
-            keep_time = bool(self._keep_time_axis)
-            self._keep_time_axis = True
-            shape = tuple(self.convolution_shape)
-            self._add_insolation = True
-            self._keep_time_axis = bool(keep_time)
             insol = []
             if self._sequence is not None:
                 for s in range(self._sequence):
@@ -646,7 +667,6 @@ class SeriesDataGenerator(Sequence):
                     np.concatenate([self.insolation_da.values[samples + n * self._interval, np.newaxis, np.newaxis]
                                     for n in range(self._input_time_steps)], axis=1)
                 )
-            p = p.reshape((n_sample,) + shape)
             p = np.concatenate([p, insol[0]], axis=2)
         p = p.reshape((n_sample, -1))
 
@@ -673,8 +693,11 @@ class SeriesDataGenerator(Sequence):
 
                 # Format spatial shape for convolutions; also takes care of time axis
                 if self._is_convolutional:
+                    cl = bool(self.channels_last)
+                    self.channels_last = False
                     p = p.reshape((n_sample,) + self.convolution_shape)
                     t = t.reshape((n_sample,) + self.output_convolution_shape)
+                    self.channels_last = bool(cl)
                 elif self._keep_time_axis:
                     p = p.reshape((n_sample,) + self.dense_shape)
                     t = t.reshape((n_sample,) + self.output_dense_shape)
@@ -701,8 +724,11 @@ class SeriesDataGenerator(Sequence):
 
             # Format spatial shape for convolutions; also takes care of time axis
             if self._is_convolutional:
+                cl = bool(self.channels_last)
+                self.channels_last = False
                 p = p.reshape((n_sample,) + self.convolution_shape)
                 t = t.reshape((n_sample,) + self.output_convolution_shape)
+                self.channels_last = bool(cl)
             elif self._keep_time_axis:
                 p = p.reshape((n_sample,) + self.dense_shape)
                 t = t.reshape((n_sample,) + self.output_dense_shape)
@@ -712,10 +738,28 @@ class SeriesDataGenerator(Sequence):
         # Add constants
         if self.constants is not None:
             constants = np.repeat(np.expand_dims(self.constants, axis=0), n_sample, axis=0)
+            if self._keep_time_axis:
+                constants = np.expand_dims(constants, 1)
             if isinstance(p, list):
                 p = p + [constants]
             else:
                 p = [p, constants]
+
+        # Transpose to channels_last if requested
+        if self.channels_last:
+            if isinstance(p, list):
+                for s in range(len(p)):
+                    try:
+                        p[s] = p[s].transpose(self._transpose)
+                    except ValueError:  # solar inputs retain time dimension
+                        p[s] = p[s].transpose(self._time_transpose)
+            else:
+                p = p.transpose(self._transpose)
+            if isinstance(targets, list):
+                for s in range(len(targets)):
+                    targets[s] = targets[s].transpose(self._transpose)
+            else:
+                targets = targets.transpose(self._transpose)
 
         return p, targets
 
@@ -754,7 +798,7 @@ class ArrayDataGenerator(Sequence):
 
     def __init__(self, model, array, rank=2, batch_size=32, input_slice=None, output_slice=None,
                  input_time_steps=1, output_time_steps=1, sequence=None, interval=1,
-                 shuffle=False, remove_nan=True, insolation_array=None, constants=None):
+                 shuffle=False, remove_nan=True, insolation_array=None, constants=None, channels_last=False):
         """
         Initialize an ArrayDataGenerator.
 
@@ -778,6 +822,8 @@ class ArrayDataGenerator(Sequence):
         :param insolation_array: np.array: insolation (see DLWP.util.insolation) for the given data
         :param constants: ndarray: additional constant fields to add to each input. Must match the spatial dimensions
             (last `rank` dimensions) of the input data.
+        :param channels_last: bool: if True, returns data with channels as the last dimension. May slow down processing
+            of data, but may speed up GPU operations on the data.
         """
         assert int(rank) > 0
         assert int(input_time_steps) > 0
@@ -833,6 +879,14 @@ class ArrayDataGenerator(Sequence):
                 "spatial dimensions of constants must be the same as input data; got %s and %s" % \
                 (self.constants.shape[-self.rank:], self.shape[-self.rank:])
 
+        # Transpose option
+        self.channels_last = to_bool(channels_last)
+        self._time_transpose = (0, 1,) + tuple(range(3, 3 + self.rank)) + (2,)
+        if self._keep_time_axis:
+            self._transpose = self._time_transpose
+        else:
+            self._transpose = (0,) + tuple(range(2, 2 + self.rank)) + (1,)
+
     @property
     def shape(self):
         """
@@ -866,11 +920,19 @@ class ArrayDataGenerator(Sequence):
             (time_step, channels, y, x); if not, (channels, y, x). Includes insolation.
         """
         if self._keep_time_axis:
-            return (self._input_time_steps,) + (int(np.prod(self.shape[1:-self.rank])) + self._add_insolation,)\
+            result = (self._input_time_steps,) + (int(np.prod(self.shape[1:-self.rank])) + self._add_insolation,)\
                 + self.shape[-self.rank:]
+            if self.channels_last:
+                return tuple([result[s - 1] for s in self._time_transpose[1:]])
+            else:
+                return result
         else:
-            return (int(np.prod(self.shape[:-self.rank])) +
-                    self._input_time_steps * self._add_insolation,) + self.shape[-self.rank:]
+            result = (int(np.prod(self.shape[:-self.rank])) +
+                      self._input_time_steps * self._add_insolation,) + self.shape[-self.rank:]
+            if self.channels_last:
+                return tuple([result[s-1] for s in self._transpose[1:]])
+            else:
+                return result
 
     @property
     def shape_2d(self):
@@ -917,10 +979,18 @@ class ArrayDataGenerator(Sequence):
             recurrent, (time_step, channels, y, x); if not, (channels, y, x).
         """
         if self._keep_time_axis:
-            return (self._output_time_steps,) + (int(np.prod(self.output_shape[1:-self.rank])),) \
+            result = (self._output_time_steps,) + (int(np.prod(self.output_shape[1:-self.rank])),) \
                 + self.output_shape[-self.rank:]
+            if self.channels_last:
+                return tuple([result[s-1] for s in self._time_transpose[1:]])
+            else:
+                return result
         else:
-            return (int(np.prod(self.output_shape[:-self.rank])),) + self.shape[-self.rank:]
+            result = (int(np.prod(self.output_shape[:-self.rank])),) + self.shape[-self.rank:]
+            if self.channels_last:
+                return tuple([result[s-1] for s in self._transpose[1:]])
+            else:
+                return result
 
     @property
     def output_shape_2d(self):
@@ -939,10 +1009,12 @@ class ArrayDataGenerator(Sequence):
     def insolation_shape(self):
         """
         :return: the shape of insolation inputs in steps 1- of an input sequence, or None if add_insolation is False.
-            Note that it always includes the time step dimension, but no channels dimension. The network needs to
-            accommodate this.
+            Note that it always includes the time step dimension. The network needs to accommodate this.
         """
-        return tuple((self._input_time_steps, 1) + self.convolution_shape[-self.rank:])
+        if self.channels_last:
+            return tuple((self._input_time_steps,) + self.convolution_shape[:self.rank]) + (1,)
+        else:
+            return tuple((self._input_time_steps, 1) + self.convolution_shape[-self.rank:])
 
     def on_epoch_end(self):
         self._indices = np.arange(self._n_sample)
@@ -960,13 +1032,6 @@ class ArrayDataGenerator(Sequence):
         p = np.concatenate([self.array[samples + n * self._interval, self._input_slice][:, np.newaxis]
                             for n in range(self._input_time_steps)], axis=1)
         if self._add_insolation:
-            # Pretend like we have no insolation and keep the time axis
-            self._add_insolation = False
-            keep_time = bool(self._keep_time_axis)
-            self._keep_time_axis = True
-            shape = tuple(self.convolution_shape)
-            self._add_insolation = True
-            self._keep_time_axis = bool(keep_time)
             insol = []
             if self._sequence is not None:
                 for s in range(self._sequence):
@@ -982,7 +1047,6 @@ class ArrayDataGenerator(Sequence):
                     np.concatenate([self.insolation_array[samples + n * self._interval, np.newaxis, np.newaxis]
                                     for n in range(self._input_time_steps)], axis=1)
                 )
-            p = p.reshape((n_sample,) + shape)
             p = np.concatenate([p, insol[0]], axis=2)
         p = p.reshape((n_sample, -1))
 
@@ -1005,8 +1069,11 @@ class ArrayDataGenerator(Sequence):
 
                 # Format spatial shape for convolutions; also takes care of time axis
                 if self._is_convolutional:
+                    cl = bool(self.channels_last)
+                    self.channels_last = False
                     p = p.reshape((n_sample,) + self.convolution_shape)
                     t = t.reshape((n_sample,) + self.output_convolution_shape)
+                    self.channels_last = bool(cl)
                 elif self._keep_time_axis:
                     p = p.reshape((n_sample,) + self.dense_shape)
                     t = t.reshape((n_sample,) + self.output_dense_shape)
@@ -1023,14 +1090,17 @@ class ArrayDataGenerator(Sequence):
 
             t = t.reshape((n_sample, -1))
 
-            # Remove samples with NaN; scale and impute
+            # Remove samples with NaN if requested
             if self._remove_nan:
                 p, t = delete_nan_samples(p, t)
 
             # Format spatial shape for convolutions; also takes care of time axis
             if self._is_convolutional:
+                cl = bool(self.channels_last)
+                self.channels_last = False
                 p = p.reshape((n_sample,) + self.convolution_shape)
                 t = t.reshape((n_sample,) + self.output_convolution_shape)
+                self.channels_last = bool(cl)
             elif self._keep_time_axis:
                 p = p.reshape((n_sample,) + self.dense_shape)
                 t = t.reshape((n_sample,) + self.output_dense_shape)
@@ -1040,10 +1110,28 @@ class ArrayDataGenerator(Sequence):
         # Add constants
         if self.constants is not None:
             constants = np.repeat(np.expand_dims(self.constants, axis=0), n_sample, axis=0)
+            if self._keep_time_axis:
+                constants = np.expand_dims(constants, 1)
             if isinstance(p, list):
                 p = p + [constants]
             else:
                 p = [p, constants]
+
+        # Transpose to channels_last if requested
+        if self.channels_last:
+            if isinstance(p, list):
+                for s in range(len(p)):
+                    try:
+                        p[s] = p[s].transpose(self._transpose)
+                    except ValueError:  # solar inputs retain time dimension
+                        p[s] = p[s].transpose(self._time_transpose)
+            else:
+                p = p.transpose(self._transpose)
+            if isinstance(targets, list):
+                for s in range(len(targets)):
+                    targets[s] = targets[s].transpose(self._transpose)
+            else:
+                targets = targets.transpose(self._transpose)
 
         return p, targets
 

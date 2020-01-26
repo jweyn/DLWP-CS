@@ -287,7 +287,7 @@ class CubeSphereRemap(_BaseRemap):
                                                 names=('face', 'height', 'width'))
 
         # Assign the new coordinate and transpose
-        new_dims = tuple([d for d in ds.dims.keys() if d != 'ncol']) + ('height', 'width', 'face')
+        new_dims = tuple([d for d in ds.dims.keys() if d != 'ncol']) + ('face', 'height', 'width')
         if self.verbose:
             print('CubeSphereRemap.convert_to_faces: assigning new coordinates to dataset')
         ds_new = ds.assign_coords(ncol=face_index).unstack('ncol').transpose(*new_dims)
