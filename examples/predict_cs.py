@@ -17,7 +17,7 @@ from datetime import datetime
 
 from DLWP.model import SeriesDataGenerator, TimeSeriesEstimator
 from DLWP.model.preprocessing import get_constants
-from DLWP.util import load_model, remove_chars
+from DLWP.util import load_model, remove_chars, is_channels_last
 from DLWP.model import verify
 from DLWP.remap import CubeSphereRemap
 
@@ -120,8 +120,8 @@ else:
     val_generator = SeriesDataGenerator(dlwp, predictor_ds, rank=3, add_insolation=add_insolation,
                                         input_sel=input_selection, output_sel=output_selection,
                                         input_time_steps=input_time_steps, output_time_steps=output_time_steps,
-                                        constants=constants, channels_last=True, shuffle=False,
-                                        sequence=sequence, batch_size=32, load=False)
+                                        constants=constants, shuffle=False, sequence=sequence, batch_size=32,
+                                        load=False, channels_last=is_channels_last(dlwp))
 
     estimator = TimeSeriesEstimator(dlwp, val_generator)
 
@@ -130,6 +130,10 @@ else:
     samples = np.array([int(np.where(val_generator.ds['sample'] == s)[0]) for s in initialization_dates]) \
         - input_time_steps + 1
     time_series = estimator.predict(num_forecast_steps, samples=samples, verbose=1)
+
+    # Transpose if channels_last was used for the model
+    if is_channels_last(dlwp):
+        time_series = time_series.transpose('f_hour', 'time', 'varlev', 'x0', 'x1', 'x2')
 
     # Scale the time series. Smart enough to align dimensions without expand_dims
     if scale_variables:

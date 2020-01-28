@@ -23,7 +23,7 @@ from DLWP.model import SeriesDataGenerator, TimeSeriesEstimator
 from DLWP.model import verify
 from DLWP.model.preprocessing import get_constants
 from DLWP.plot import history_plot, zonal_mean_plot
-from DLWP.util import load_model, train_test_split_ind, remove_chars
+from DLWP.util import load_model, train_test_split_ind, remove_chars, is_channels_last
 from DLWP.remap import CubeSphereRemap
 
 # Set a TF session with memory growth
@@ -286,7 +286,8 @@ for m, model in enumerate(models):
                                             input_sel=input_selection[m], output_sel=output_selection[m],
                                             input_time_steps=input_time_steps[m],
                                             output_time_steps=output_time_steps[m],
-                                            sequence=sequence, batch_size=64, load=False, constants=constants)
+                                            sequence=sequence, batch_size=64, load=False, constants=constants,
+                                            channels_last=is_channels_last(dlwp))
 
         estimator = TimeSeriesEstimator(dlwp, val_generator)
 
@@ -295,6 +296,10 @@ for m, model in enumerate(models):
         samples = np.array([int(np.where(val_generator.ds['sample'] == s)[0]) for s in verification.time]) \
             - input_time_steps[m] + 1
         time_series = estimator.predict(num_forecast_steps, samples=samples, verbose=1)
+
+        # Transpose if channels_last was used for the model
+        if is_channels_last(dlwp):
+            time_series = time_series.transpose('f_hour', 'time', 'varlev', 'x0', 'x1', 'x2')
 
         # For some reason the DataArray produced by TimeSeriesEstimator is incompatible with ncview and the remap code.
         # Change the coordinates using a different method.

@@ -145,7 +145,6 @@ print('Time to load data: %d m %0.2f s' % (np.floor(total_time / 60), total_time
 #%% Compile the model structure with some generator data information
 
 # Up-sampling convolutional network or U-net
-p, t = generator[0]
 cs = generator.convolution_shape
 cso = generator.output_convolution_shape
 input_solar = (integration_steps > 1 and (isinstance(add_solar, str) or add_solar))

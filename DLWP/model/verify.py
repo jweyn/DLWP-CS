@@ -244,7 +244,7 @@ def predictors_to_time_series(predictors, time_steps, has_time_dim=True, use_fir
     return result
 
 
-def add_metadata_to_forecast(forecast, f_hour, meta_ds, f_hour_timedelta_type=True):
+def add_metadata_to_forecast(forecast, f_hour, meta_ds, f_hour_timedelta_type=True, channels_last=False):
     """
     Add metadata to a forecast based on the initialization times and coordinates in meta_ds.
 
@@ -253,6 +253,7 @@ def add_metadata_to_forecast(forecast, f_hour, meta_ds, f_hour_timedelta_type=Tr
     :param meta_ds: xarray Dataset: contains metadata for time, variable, lat, and lon
     :param f_hour_timedelta_type: bool: if True, converts f_hour dimension into a timedelta type. May not always be
         compatible with netCDF applications.
+    :param channels_last: bool: if True, assumes varlev or variable/level are last dimensions
     :return: xarray.DataArray: array with metadata
     """
     nf = len(f_hour)
@@ -261,25 +262,26 @@ def add_metadata_to_forecast(forecast, f_hour, meta_ds, f_hour_timedelta_type=Tr
     if nf != forecast.shape[0]:
         raise ValueError("'f_hour' coordinate must have same size as the first axis of 'forecast'")
     if 'level' in meta_ds.dims:
-        forecast = forecast.reshape((nf, meta_ds.dims['sample'], meta_ds.dims['variable'], meta_ds.dims['level'],
-                                     meta_ds.dims['lat'], meta_ds.dims['lon']))
-        forecast = xr.DataArray(
-            forecast,
-            coords=[f_hour, meta_ds.sample, meta_ds.variable, meta_ds.level, meta_ds.lat, meta_ds.lon],
-            dims=['f_hour', 'time', 'variable', 'level', 'lat', 'lon'],
-            name='forecast'
-        )
+        if channels_last:
+            dims_order = ['sample', 'lat', 'lon', 'variable', 'level']
+        else:
+            dims_order = ['sample', 'variable', 'level', 'lat', 'lon']
+        forecast = forecast.reshape([nf] + [meta_ds.dims[d] for d in dims_order])
     else:
-        forecast = xr.DataArray(
-            forecast,
-            coords=[f_hour, meta_ds.sample, meta_ds.varlev, meta_ds.lat, meta_ds.lon],
-            dims=['f_hour', 'time', 'varlev', 'lat', 'lon'],
-            name='forecast'
-        )
+        if channels_last:
+            dims_order = ['sample', 'lat', 'lon', 'varlev']
+        else:
+            dims_order = ['sample', 'varlev', 'lat', 'lon']
+    forecast = xr.DataArray(
+        forecast,
+        coords=[f_hour] + [meta_ds[d] for d in dims_order],
+        dims=['f_hour'] + dims_order,
+        name='forecast'
+    )
     return forecast
 
 
-def add_metadata_to_forecast_cs(forecast, f_hour, meta_ds, f_hour_timedelta_type=False):
+def add_metadata_to_forecast_cs(forecast, f_hour, meta_ds, f_hour_timedelta_type=False, channels_last=False):
     """
     Add metadata to a forecast based on the initialization times and coordinates in meta_ds, which is on a cubed sphere.
 
@@ -288,6 +290,7 @@ def add_metadata_to_forecast_cs(forecast, f_hour, meta_ds, f_hour_timedelta_type
     :param meta_ds: xarray Dataset: contains metadata for time, variable, height, width, and face
     :param f_hour_timedelta_type: bool: if True, converts f_hour dimension into a timedelta type. May not always be
         compatible with netCDF applications.
+    :param channels_last: bool: if True, assumes varlev or variable/level are last dimensions
     :return: xarray.DataArray: array with metadata
     """
     nf = len(f_hour)
@@ -296,22 +299,22 @@ def add_metadata_to_forecast_cs(forecast, f_hour, meta_ds, f_hour_timedelta_type
     if nf != forecast.shape[0]:
         raise ValueError("'f_hour' coordinate must have same size as the first axis of 'forecast'")
     if 'level' in meta_ds.dims:
-        forecast = forecast.reshape((nf, meta_ds.dims['sample'], meta_ds.dims['variable'], meta_ds.dims['level'],
-                                     meta_ds.dims['height'], meta_ds.dims['width'], meta_ds.dims['face']))
-        forecast = xr.DataArray(
-            forecast,
-            coords=[f_hour, meta_ds.sample, meta_ds.variable, meta_ds.level,
-                    meta_ds.height, meta_ds.width, meta_ds.face],
-            dims=['f_hour', 'time', 'variable', 'level', 'height', 'width', 'face'],
-            name='forecast'
-        )
+        if channels_last:
+            dims_order = ['sample', 'face', 'height', 'width', 'variable', 'level']
+        else:
+            dims_order = ['sample', 'variable', 'level', 'face', 'height', 'width']
+        forecast = forecast.reshape([nf] + [meta_ds.dims[d] for d in dims_order])
     else:
-        forecast = xr.DataArray(
-            forecast,
-            coords=[f_hour, meta_ds.sample, meta_ds.varlev, meta_ds.height, meta_ds.width, meta_ds.face],
-            dims=['f_hour', 'time', 'varlev', 'height', 'width', 'face'],
-            name='forecast'
-        )
+        if channels_last:
+            dims_order = ['sample', 'face', 'height', 'width', 'varlev']
+        else:
+            dims_order = ['sample', 'varlev', 'face', 'height', 'width']
+    forecast = xr.DataArray(
+        forecast,
+        coords=[f_hour] + [meta_ds[d] for d in dims_order],
+        dims=['f_hour'] + dims_order,
+        name='forecast'
+    )
     return forecast
 
 

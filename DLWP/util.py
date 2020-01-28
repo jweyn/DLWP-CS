@@ -429,3 +429,16 @@ def remove_chars(s):
     :return: str
     """
     return ''.join(re.split('[$/\\\\]', s))
+
+
+def is_channels_last(model):
+    """
+    Programmatically determine whether a DLWP model, likely loaded from disk, uses channels_last data format.
+
+    :param model: DLWPNeuralNet or DLWPFunctional instance
+    :return: bool: True if the model uses channels_last data format
+    """
+    for layer in model.model.layers:
+        if hasattr(layer, 'data_format'):
+            return layer.data_format == 'channels_last'
+    return False

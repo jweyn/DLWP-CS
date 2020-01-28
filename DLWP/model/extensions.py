@@ -307,7 +307,6 @@ class TimeSeriesEstimator(object):
                 result.shape = (t_shape[0], n_dim_1,) + t_shape[1:]
                 result = result[:, :effective_steps, ...]
         else:
-            # TODO: test this scheme for non-sequence models with channels_last dimensions
             # Giant forecast array
             result = np.full((t_shape[0], effective_steps,) + t_shape[1:], np.nan, dtype=np.float32)
 
@@ -318,13 +317,14 @@ class TimeSeriesEstimator(object):
                 if self.channels_last and not self.generator._keep_time_axis:
                     result[:, s] = self.model.predict(p_da.values.transpose(self._backward_transpose).reshape(p_shape),
                                                       **kwargs)
-                result[:, s] = self.model.predict(p_da.values.reshape(p_shape), **kwargs)
+                else:
+                    result[:, s] = self.model.predict(p_da.values.reshape(p_shape), **kwargs)
 
                 # Add metadata to the prediction
                 if self.channels_last:
-                    if self.generator._keep_time_axis:
+                    if not self.generator._keep_time_axis:
                         r = result[:, s].reshape((p_shape[0],) + self.generator.convolution_shape[-self.rank-1:-1] +
-                                                 (self._output_time_steps, -1))
+                                                 (self._output_time_steps, -1)).transpose(self._forward_transpose)
                     else:
                         r = result[:, s]
                     r_da = xr.DataArray(

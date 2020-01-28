@@ -318,7 +318,7 @@ class DLWPNeuralNet(object):
 
 class DLWPFunctional(object):
     """
-    DLWP model class which uses model built on the Keras Functional API. This class DOES NOT support scaling or
+    DLWP model class which uses model built on the Keras Model API. This class DOES NOT support scaling or
     imputing of input/target data; this must be done separately.
     """
     def __init__(self, is_convolutional=True, is_recurrent=False, time_dim=1):
