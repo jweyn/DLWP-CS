@@ -1045,11 +1045,10 @@ class CubeSpherePadding2D(ZeroPadding3D):
     """
 
     def __init__(self,
-                 padding=1,
+                 padding=(1, 1),
                  data_format='channels_first',
                  **kwargs):
         data_format = K.normalize_data_format(data_format)
-        assert isinstance(padding, int), "CubePadding2D only accepts an integer for 'padding'"
         super(CubeSpherePadding2D, self).__init__(padding=padding,
                                                   data_format=data_format,
                                                   **kwargs)

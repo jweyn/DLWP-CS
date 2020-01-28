@@ -448,6 +448,7 @@ class DLWPFunctional(object):
             else:
                 p[:] = result[-1]
             time_series[t * self._n_steps:(t + 1) * self._n_steps, ...] = np.stack(result, axis=0)
+            # TODO: implement channels_last option here
         time_series = time_series.reshape((out_steps, sample_dim, self.time_dim, -1) + feature_shape[1:])
         if not keep_time_dim:
             time_series = time_series.transpose((0, 2, 1) + tuple(range(3, 3 + len(feature_shape))))

@@ -35,8 +35,8 @@ K.set_session(tf.Session(config=config))
 # Configure the data files. The predictor file contains the predictors for the model, already on the cubed sphere,
 # with the conversion to the face coordinate. The scale file contains 'mean' and 'std' variables to perform inverse
 # scaling back to real data units.
-root_directory = '/home/disk/wave2/jweyn/Data/DLWP'
-predictor_file = '%s/era5_2deg_3h_CS_1979-2018_z-tau-t2_500-1000_tcwv_psi850.nc' % root_directory
+root_directory = '/home/gold/jweyn/Data'
+predictor_file = os.path.join(root_directory, 'era5_2deg_3h_CS2_1979-2018_z-tau-t2_500-1000_tcwv_psi850.nc')
 scale_file = '%s/era5_2deg_scale_z-tau-t2_500-1000_tcwv_psi850.nc' % root_directory
 
 # If True, reverse the latitude coordinate in the predicted output
@@ -47,21 +47,21 @@ map_files = ('/home/disk/brume/jweyn/Documents/DLWP/map_LL91x180_CS48.nc',
              '/home/disk/brume/jweyn/Documents/DLWP/map_CS48_LL91x180.nc')
 
 # Names of model files, located in the root_directory, and labels for those models
-model = 'dlwp_era5_6h-3_CS48_tau-sfc1000-tcwv-lsm-topo_UNET2-relumax'
-model_label = '5-variable U-net CNN TCWV'
+model = 'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2-relumax-2'
+model_label = '4-variable U-net CNN FHW'
 file_suffix = '_20170710'
 
 constant_fields = [
-    (os.path.join(root_directory, 'era5_2deg_3h_CS_land_sea_mask.nc'), 'lsm'),
-    (os.path.join(root_directory, 'era5_2deg_3h_CS_scaled_topo.nc'), 'z')
+    (os.path.join(root_directory, 'era5_2deg_3h_CS2_land_sea_mask.nc'), 'lsm'),
+    (os.path.join(root_directory, 'era5_2deg_3h_CS2_scaled_topo.nc'), 'z')
 ]
 
 # Optional list of selections to make from the predictor dataset for each model. This is useful if, for example,
 # you want to examine models that have different numbers of vertical levels but one predictor dataset contains
 # the data that all models need. Separate input and output selections are available for models using different inputs
 # and outputs. Also specify the number of input/output time steps in each model.
-input_selection = {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0', 'tcwv/0']}
-output_selection = {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0', 'tcwv/0']}
+input_selection = {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0']}
+output_selection = {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0']}
 add_insolation = True
 input_time_steps = 2
 output_time_steps = 2
@@ -78,7 +78,7 @@ dates = pd.date_range('2017-07-01', '2017-07-10', freq='D')
 initialization_dates = xr.DataArray(dates)
 
 # Number of forward integration weather forecast time steps
-num_forecast_hours = 365 * 24
+num_forecast_hours = 7 * 24
 dt = 6
 
 # Scale the variables to original units
@@ -120,8 +120,8 @@ else:
     val_generator = SeriesDataGenerator(dlwp, predictor_ds, rank=3, add_insolation=add_insolation,
                                         input_sel=input_selection, output_sel=output_selection,
                                         input_time_steps=input_time_steps, output_time_steps=output_time_steps,
-                                        constants=constants,
-                                        sequence=sequence, batch_size=64, load=False)
+                                        constants=constants, channels_last=True, shuffle=False,
+                                        sequence=sequence, batch_size=32, load=False)
 
     estimator = TimeSeriesEstimator(dlwp, val_generator)
 
