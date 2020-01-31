@@ -1110,7 +1110,6 @@ class CubeSpherePadding2D(ZeroPadding3D):
                 ], axis=2), 2
             ))
 
-            del inputs
             out1 = K.concatenate(out, axis=2)
             del out
 
@@ -1223,7 +1222,6 @@ class CubeSpherePadding2D(ZeroPadding3D):
                 ], axis=1), 1
             ))
 
-            del inputs
             out1 = K.concatenate(out, axis=1)
             del out
 
@@ -1652,8 +1650,8 @@ def anomaly_correlation_loss(mean=None, regularize_mean='mse', reverse=True):
 
 
 # Compatibility names
-lat_loss = latitude_weighted_loss()
-acc_loss = anomaly_correlation_loss()
+# lat_loss = latitude_weighted_loss()
+# acc_loss = anomaly_correlation_loss()
 
 
 # ==================================================================================================================== #
