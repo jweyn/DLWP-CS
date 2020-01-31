@@ -24,11 +24,11 @@ from DLWP.model import DLWPNeuralNet, SeriesDataGenerator, verify
 from DLWP.model.extensions import TimeSeriesEstimator
 from DLWP.util import save_model, load_model
 from DLWP.custom import EarlyStoppingMin
-from keras.callbacks import History, TensorBoard
+from tensorflow.keras.callbacks import History, TensorBoard
 
 # Random seed for reproducibility
 np.random.seed(0)
-tf.set_random_seed(0)
+tf.compat.v1.set_random_seed(0)
 
 
 #%% Parameters

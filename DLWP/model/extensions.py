@@ -137,6 +137,20 @@ class TimeSeriesEstimator(object):
         self._output_time_steps = (generator._output_time_steps if isinstance(generator, SeriesDataGenerator)
                                    else model.time_dim)
 
+        # Channels last option
+        self.channels_last = hasattr(self.generator, 'channels_last') and self.generator.channels_last
+        self._forward_transpose = (0, self.rank + 1) + tuple(range(1, 1 + self.rank)) + (-1,)
+        self._backward_transpose = (0,) + tuple(range(2, 2 + self.rank)) + (1, -1,)
+
+        # Constants in the generator
+        if hasattr(self.generator, 'constants') and self.generator.constants is not None:
+            if self.channels_last:
+                self.constants = self.generator.constants.transpose(tuple(range(1, 1 + self.rank)) + (0,))
+            else:
+                self.constants = self.generator.constants
+        else:
+            self.constants = None
+
     @property
     def shape(self):
         return (self.generator._n_sample,) + self.generator.shape
@@ -195,17 +209,30 @@ class TimeSeriesEstimator(object):
 
         # Add metadata. The sample dimension denotes the *start* time of the sample, for insolation purposes. This is
         # then corrected when providing the final output time series.
-        p = p.reshape((p_shape[0], self._input_time_steps, -1,) + self.generator.convolution_shape[-self.rank:])
         sample_coord = self.generator.ds.sample[:self.generator._n_sample] if len(samples) == 0 else \
             self.generator.ds.sample[samples]
         if not self._is_series:
             sample_coord = sample_coord - self._dt * (self._input_time_steps - 1)
-        p_da = xr.DataArray(
-            p,
-            coords=([sample_coord, in_times, self._input_sel['varlev']] +
-                    [np.arange(d) for d in self.generator.convolution_shape[-self.rank:]]),
-            dims=['sample', 'time_step', 'varlev'] + ['x%d' % d for d in range(self.rank)]
-        )
+        if self.channels_last:
+            # Split time step/varlev at the end and transpose
+            if not self.generator._keep_time_axis:
+                p = p.reshape((p_shape[0],) + self.generator.convolution_shape[-self.rank-1:-1] +
+                              (self._input_time_steps, -1)).transpose(self._forward_transpose)
+            p_da = xr.DataArray(
+                p,
+                coords=([sample_coord, in_times] +
+                        [np.arange(d) for d in self.generator.convolution_shape[-self.rank-1:-1]] +
+                        [self._input_sel['varlev']]),
+                dims=['sample', 'time_step'] + ['x%d' % d for d in range(self.rank)] + ['varlev']
+            )
+        else:
+            p = p.reshape((p_shape[0], self._input_time_steps, -1,) + self.generator.convolution_shape[-self.rank:])
+            p_da = xr.DataArray(
+                p,
+                coords=([sample_coord, in_times, self._input_sel['varlev']] +
+                        [np.arange(d) for d in self.generator.convolution_shape[-self.rank:]]),
+                dims=['sample', 'time_step', 'varlev'] + ['x%d' % d for d in range(self.rank)]
+            )
         if self.rank == 2:
             p_da = p_da.rename({'x0': 'lat', 'x1': 'lon'}).assign_coords(lat=self.generator.ds.lat,
                                                                          lon=self.generator.ds.lon)
@@ -225,6 +252,7 @@ class TimeSeriesEstimator(object):
         if isinstance(self.model, DLWPFunctional) and self.model._n_steps > 1:
             if not self.generator._add_insolation:
                 # For the DLWPFunctional model, just use its predict_timeseries API, which handles effective steps
+                # TODO: correctly handle channels_last
                 result = self.model.predict_timeseries(predictors, steps, keep_time_dim=True,
                                                        **kwargs).reshape((-1,) + t_shape)[:effective_steps, ...]
                 result = result.transpose((0, 1) + tuple(range(2, len(result.shape)))).copy()
@@ -245,21 +273,35 @@ class TimeSeriesEstimator(object):
 
                     # Assign new insolation to list of inputs
                     new_t = new_t + self._output_time_steps * self.model._n_steps * self._dt
-                    new_insolation = [np.concatenate([insolation(new_t + (n + m * self._input_time_steps) * self._dt,
-                                                                 self.generator.ds.lat.values,
-                                                                 self.generator.ds.lon.values)[:, None, None]
-                                                      for n in range(self._input_time_steps)], axis=1)
-                                      for m in range(self.model._n_steps)]
+                    new_insolation = [np.concatenate(
+                        [np.expand_dims(insolation(new_t + (n + m * self._input_time_steps) * self._dt,
+                                                   self.generator.ds.lat.values,
+                                                   self.generator.ds.lon.values)[:, None],
+                                        axis=-1 if self.channels_last else 1)
+                         for n in range(self._input_time_steps)],
+                        axis=1) for m in range(self.model._n_steps)]
 
-                    predictors = [
-                        np.concatenate([result[:, s, -1].reshape((-1,) + self.shape[1:]), new_insolation[0]],
-                                       axis=2).reshape((-1,) + self.convolution_shape[1:])
-                    ] + new_insolation[1:]
+                    if self.channels_last:
+                        if self.generator._keep_time_axis:
+                            r = result[:, s, -1]
+                            predictors = [np.concatenate([r, new_insolation[0]], axis=-1).reshape(
+                                (-1,) + self.convolution_shape[1:])] + new_insolation[1:]
+                        else:
+                            r = result[:, s, -1].reshape(t_shape[:-1] + (self._output_time_steps, -1)).transpose(
+                                self._forward_transpose
+                            )
+                            predictors = [np.concatenate([r, new_insolation[0]], axis=-1).transpose(
+                                self._backward_transpose).reshape((-1,) + self.convolution_shape[1:])] \
+                                + new_insolation[1:]
+                    else:
+                        predictors = [
+                            np.concatenate([result[:, s, -1].reshape((-1,) + self.shape[1:]), new_insolation[0]],
+                                           axis=2).reshape((-1,) + self.convolution_shape[1:])
+                        ] + new_insolation[1:]
 
                     # Add constants
-                    if hasattr(self.generator, 'constants') and self.generator.constants is not None:
-                        predictors.append(np.repeat(np.expand_dims(self.generator.constants, axis=0),
-                                                    len(p_da.sample), axis=0))
+                    if self.constants is not None:
+                        predictors.append(np.repeat(np.expand_dims(self.constants, axis=0), len(p_da.sample), axis=0))
 
                 n_dim_1 = result.size // int(np.prod(t_shape))
                 result.shape = (t_shape[0], n_dim_1,) + t_shape[1:]
@@ -272,17 +314,36 @@ class TimeSeriesEstimator(object):
             for s in range(effective_steps):
                 if 'verbose' in kwargs and kwargs['verbose'] > 0:
                     print('Time step %d/%d' % (s + 1, effective_steps))
-                result[:, s] = self.model.predict(p_da.values.reshape(p_shape), **kwargs)
+                if self.channels_last and not self.generator._keep_time_axis:
+                    result[:, s] = self.model.predict(p_da.values.transpose(self._backward_transpose).reshape(p_shape),
+                                                      **kwargs)
+                else:
+                    result[:, s] = self.model.predict(p_da.values.reshape(p_shape), **kwargs)
 
                 # Add metadata to the prediction
-                r_da = xr.DataArray(
-                    result[:, s].reshape((p_shape[0], self._output_time_steps, -1,) +
-                                         self.generator.convolution_shape[-self.rank:]),
-                    coords=([p_da.sample + (es + self._interval - 1) * self._dt,
-                             np.arange(self._output_time_steps), self._output_sel['varlev']] +
-                            [np.arange(d) for d in self.generator.convolution_shape[-self.rank:]]),
-                    dims=['sample', 'time_step', 'varlev'] + ['x%d' % d for d in range(self.rank)]
-                )
+                if self.channels_last:
+                    if not self.generator._keep_time_axis:
+                        r = result[:, s].reshape((p_shape[0],) + self.generator.convolution_shape[-self.rank-1:-1] +
+                                                 (self._output_time_steps, -1)).transpose(self._forward_transpose)
+                    else:
+                        r = result[:, s]
+                    r_da = xr.DataArray(
+                        r,
+                        coords=([p_da.sample + (es + self._interval - 1) * self._dt,
+                                 np.arange(self._output_time_steps)] +
+                                [np.arange(d) for d in self.generator.convolution_shape[-self.rank-1:-1]] +
+                                [self._output_sel['varlev']]),
+                        dims=['sample', 'time_step'] + ['x%d' % d for d in range(self.rank)] + ['varlev']
+                    )
+                else:
+                    r_da = xr.DataArray(
+                        result[:, s].reshape((p_shape[0], self._output_time_steps, -1,) +
+                                             self.generator.convolution_shape[-self.rank:]),
+                        coords=([p_da.sample + (es + self._interval - 1) * self._dt,
+                                 np.arange(self._output_time_steps), self._output_sel['varlev']] +
+                                [np.arange(d) for d in self.generator.convolution_shape[-self.rank:]]),
+                        dims=['sample', 'time_step', 'varlev'] + ['x%d' % d for d in range(self.rank)]
+                    )
                 if self.rank == 2:
                     r_da = r_da.rename({'x0': 'lat', 'x1': 'lon'}).assign_coords(lat=self.generator.ds.lat,
                                                                                  lon=self.generator.ds.lon)
@@ -318,25 +379,46 @@ class TimeSeriesEstimator(object):
         # Return a DataArray. Keep the actual model initialization, that is, the last available time in the inputs,
         # as the time
         rv = result.view()
-        rv.shape = (p_shape[0], effective_steps, self._output_time_steps, -1,) + \
-            self.generator.convolution_shape[-self.rank:]
+        if self.channels_last:
+            if not self.generator._keep_time_axis:
+                rv.shape = (p_shape[0], effective_steps,) + \
+                           self.generator.output_convolution_shape[-self.rank-1:-1] + (self._output_time_steps, -1,)
+        else:
+            rv.shape = (p_shape[0], effective_steps, self._output_time_steps, -1,) + \
+                self.generator.output_convolution_shape[-self.rank:]
         if f_hour_timedelta_type:
             dt = self._dt.values
         else:
             dt = np.array(self._dt.values.astype('timedelta64[h]').astype('float'))
         if keep_time_dim:
-            result_da = xr.DataArray(
-                rv.transpose((1, 0) + tuple(range(2, len(rv.shape)))),
-                coords=[
-                    np.arange(dt, (effective_steps * (es + self._interval - 1) + 1) * dt,
-                              (es + self._interval - 1) * dt),
-                    sample_coord + (self._input_time_steps - 1) * self._dt,
-                    range(self._output_time_steps),
-                    self._output_sel['varlev'],
-                ] + [np.arange(d) for d in self.generator.convolution_shape[-self.rank:]],
-                dims=['f_hour', 'time', 'time_step', 'varlev'] + ['x%d' % d for d in range(self.rank)],
-                name='forecast'
-            )
+            if self.channels_last:
+                result_da = xr.DataArray(
+                    rv.transpose((1, 0) + tuple(range(2, len(rv.shape)))) if self.generator._keep_time_axis else
+                    rv.transpose((1, 0, -2) + tuple(range(2, 2 + self.rank)) + (-1,)),
+                    coords=[
+                               np.arange(dt, (effective_steps * (es + self._interval - 1) + 1) * dt,
+                                         (es + self._interval - 1) * dt),
+                               sample_coord + (self._input_time_steps - 1) * self._dt,
+                               range(self._output_time_steps),
+                           ]
+                    + [np.arange(d) for d in self.generator.output_convolution_shape[-self.rank-1:-1]]
+                    + [self._output_sel['varlev']],
+                    dims=['f_hour', 'time', 'time_step'] + ['x%d' % d for d in range(self.rank)] + ['varlev'],
+                    name='forecast'
+                )
+            else:
+                result_da = xr.DataArray(
+                    rv.transpose((1, 0) + tuple(range(2, len(rv.shape)))),
+                    coords=[
+                        np.arange(dt, (effective_steps * (es + self._interval - 1) + 1) * dt,
+                                  (es + self._interval - 1) * dt),
+                        sample_coord + (self._input_time_steps - 1) * self._dt,
+                        range(self._output_time_steps),
+                        self._output_sel['varlev'],
+                    ] + [np.arange(d) for d in self.generator.output_convolution_shape[-self.rank:]],
+                    dims=['f_hour', 'time', 'time_step', 'varlev'] + ['x%d' % d for d in range(self.rank)],
+                    name='forecast'
+                )
             if self.rank == 2:
                 result_da = result_da.rename({'x0': 'lat', 'x1': 'lon'}).assign_coords(lat=self.generator.ds.lat,
                                                                                        lon=self.generator.ds.lon)
@@ -345,18 +427,38 @@ class TimeSeriesEstimator(object):
             if not keep_inputs:
                 if prefer_first_times:
                     rv = rv[:, :, :es]
-            rv.shape = (t_shape[0], rv.shape[1] * rv.shape[2]) + rv.shape[3:]
-            result_da = xr.DataArray(
-                rv.transpose((1, 0) + tuple(range(2, len(rv.shape)))),
-                coords=[
-                    np.array([(np.arange(0, es) + self._interval + e * (es - 1 + self._interval)) * dt
-                              for e in range(effective_steps)]).flatten(),
-                    sample_coord + (self._input_time_steps - 1) * self._dt,
-                    self._output_sel['varlev'],
-                ] + [np.arange(d) for d in self.generator.convolution_shape[-self.rank:]],
-                dims=['f_hour', 'time', 'varlev'] + ['x%d' % d for d in range(self.rank)],
-                name='forecast'
-            )
+            if self.channels_last:
+                if self.generator._keep_time_axis:
+                    rv.shape = (t_shape[0], rv.shape[1] * rv.shape[2]) + rv.shape[3:]
+                result_da = xr.DataArray(
+                    rv.transpose((1, 0) + tuple(range(2, len(rv.shape)))) if self.generator._keep_time_axis else
+                    rv.transpose((1, -2, 0) + tuple(range(2, 2 + self.rank)) + (-1,)).reshape(
+                        (rv.shape[1] * rv.shape[-2], rv.shape[0]) +
+                        self.generator.output_convolution_shape[-self.rank-1:-1] + (-1,)
+                    ),
+                    coords=[
+                               np.array([(np.arange(0, es) + self._interval + e * (es - 1 + self._interval)) * dt
+                                         for e in range(effective_steps)]).flatten(),
+                               sample_coord + (self._input_time_steps - 1) * self._dt,
+                           ]
+                    + [np.arange(d) for d in self.generator.output_convolution_shape[-self.rank-1:-1]]
+                    + [self._output_sel['varlev']],
+                    dims=['f_hour', 'time'] + ['x%d' % d for d in range(self.rank)] + ['varlev'],
+                    name='forecast'
+                )
+            else:
+                rv.shape = (t_shape[0], rv.shape[1] * rv.shape[2]) + rv.shape[3:]
+                result_da = xr.DataArray(
+                    rv.transpose((1, 0) + tuple(range(2, len(rv.shape)))),
+                    coords=[
+                        np.array([(np.arange(0, es) + self._interval + e * (es - 1 + self._interval)) * dt
+                                  for e in range(effective_steps)]).flatten(),
+                        sample_coord + (self._input_time_steps - 1) * self._dt,
+                        self._output_sel['varlev'],
+                    ] + [np.arange(d) for d in self.generator.output_convolution_shape[-self.rank:]],
+                    dims=['f_hour', 'time', 'varlev'] + ['x%d' % d for d in range(self.rank)],
+                    name='forecast'
+                )
             if self.rank == 2:
                 result_da = result_da.rename({'x0': 'lat', 'x1': 'lon'}).assign_coords(lat=self.generator.ds.lat,
                                                                                        lon=self.generator.ds.lon)
@@ -366,8 +468,12 @@ class TimeSeriesEstimator(object):
         if self._uses_varlev:
             return result_da
         else:
+            # TODO: support for rank != 2
             var, lev = self._output_sel['variable'], self._output_sel['level']
             vl = pd.MultiIndex.from_product((var, lev), names=('variable', 'level'))
             result_da = result_da.assign_coords(varlev=vl).unstack('varlev')
-            result_da = result_da.transpose('f_hour', 'time', 'variable', 'level', 'lat', 'lon')
+            if self.channels_last:
+                result_da = result_da.transpose('f_hour', 'time', 'lat', 'lon', 'variable', 'level')
+            else:
+                result_da = result_da.transpose('f_hour', 'time', 'variable', 'level', 'lat', 'lon')
             return result_da

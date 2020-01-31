@@ -21,9 +21,9 @@ from datetime import datetime
 from DLWP.model import DLWPNeuralNet, SeriesDataGenerator
 from DLWP.util import save_model, train_test_split_ind
 from DLWP.custom import RNNResetStates, EarlyStoppingMin, latitude_weighted_loss, RunHistory, anomaly_correlation_loss
-from keras.regularizers import l2
-from keras.losses import mean_squared_error
-from keras.callbacks import TensorBoard
+
+from tensorflow.keras.losses import mean_squared_error
+from tensorflow.keras.callbacks import TensorBoard
 from azureml.core import Run
 import tensorflow as tf
 
@@ -50,7 +50,7 @@ if args.temp_dir != 'None':
 
 if args.seed >= 0:
     np.random.seed(args.seed)
-    tf.set_random_seed(args.seed)
+    tf.compat.v1.set_random_seed(args.seed)
 
 
 #%% Parameters

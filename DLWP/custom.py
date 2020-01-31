@@ -8,23 +8,22 @@
 Custom Keras and PyTorch classes.
 """
 
-from keras import backend as K
-from keras.callbacks import Callback, EarlyStopping
-from keras.layers.convolutional import ZeroPadding2D, ZeroPadding3D
-from keras.layers.local import LocallyConnected2D
-from keras.layers import Lambda, Layer
-from keras.losses import mean_absolute_error, mean_squared_error
-from keras.utils import conv_utils
-from keras.engine.base_layer import InputSpec
-from keras import activations, initializers, regularizers, constraints
-import numpy as np
 import tensorflow as tf
+from tensorflow.compat.v1 import keras as tfk
+from tensorflow.keras.callbacks import Callback, EarlyStopping
+from tensorflow.keras.layers import ZeroPadding2D, ZeroPadding3D, LocallyConnected2D, Lambda, Layer
+from tensorflow.keras.losses import mean_absolute_error, mean_squared_error
+from tensorflow.python.keras.utils import conv_utils
+from tensorflow.python.keras.engine.base_layer import InputSpec
+from tensorflow.keras import activations, initializers, regularizers, constraints
+import numpy as np
 
 try:
     from s2cnn import S2Convolution, SO3Convolution
 except ImportError:
     pass
 
+K = tfk.backend
 
 # ==================================================================================================================== #
 # Keras utility classes
@@ -731,13 +730,17 @@ class CubeSphereConv2D(Layer):
     """
     2D convolutional layer for data that is assumed on a cubed sphere. The requirements for using this layer are as
     follows:
-    - The input data is 5-dimensional (batch, channels, height, width, 6)
-    - Must follow "channels_first" order
-    - The last dimension must have a length of 6 for the 6 faces of the cubed sphere
+    - The input data is 5-dimensional:
+        (batch, channels, 6, height, width) for channels_first
+        (batch, 6, height, width, channels) for channels_last
+    - The first spatial dimension must have a length of 6 for the 6 faces of the cubed sphere
     - The last two faces (indices 4 and 5) are the polar faces
 
     This layer learns two separate convolutional kernels and biases, one for the equatorial faces of the cube, and one
-    for the polar faces.
+    for the polar faces. Optionally, it can learn separate kernels and biases for each polar face.
+
+    Note that this layer should be preceded by CubeSpherePadding2D otherwise there is no connection between faces of
+    the cube.
 
     Adapted from keras.layers._Conv by @jweyn
 
@@ -816,9 +819,7 @@ class CubeSphereConv2D(Layer):
         self.kernel_size = conv_utils.normalize_tuple(kernel_size, 2, 'kernel_size')
         self.strides = conv_utils.normalize_tuple(strides, 2, 'strides')
         self.padding = conv_utils.normalize_padding(padding)
-        self.data_format = K.normalize_data_format(data_format)
-        if self.data_format != 'channels_first':
-            raise ValueError("CubeSphereConv2D must have 'channels_first' order")
+        self.data_format = conv_utils.normalize_data_format(data_format)
         self.dilation_rate = conv_utils.normalize_tuple(dilation_rate, 2, 'dilation_rate')
         self.activation = activations.get(activation)
         self.use_bias = use_bias
@@ -891,14 +892,15 @@ class CubeSphereConv2D(Layer):
                                     axes={channel_axis: input_dim})
         self.built = True
 
-    def call(self, inputs):
+    def call(self, inputs, **kwargs):
         outputs = []
+        channels_first = self.data_format == 'channels_first'
 
         # Equatorial faces
         for f in range(4):
             outputs.append(
                 K.conv2d(
-                    inputs[..., f],
+                    inputs[:, :, f, :, :] if channels_first else inputs[:, f],
                     self.equatorial_kernel,
                     strides=self.strides,
                     padding=self.padding,
@@ -912,12 +914,12 @@ class CubeSphereConv2D(Layer):
                     self.equatorial_bias,
                     data_format=self.data_format
                 )
-            outputs[f] = K.expand_dims(outputs[f], -1)
+            outputs[f] = K.expand_dims(outputs[f], 2 if channels_first else 1)
 
         # South pole face
         outputs.append(
             K.conv2d(
-                inputs[..., 4],
+                inputs[:, :, 4, :, :] if channels_first else inputs[:, 4],
                 self.polar_kernel,
                 strides=self.strides,
                 padding=self.padding,
@@ -931,13 +933,14 @@ class CubeSphereConv2D(Layer):
                 self.polar_bias,
                 data_format=self.data_format
             )
-        outputs[4] = K.expand_dims(outputs[4], -1)
+        outputs[4] = K.expand_dims(outputs[4], 2 if channels_first else 1)
 
         # North pole face
         if self.flip_north_pole:
+            # Reverse the height dimension, 2 if channels_first otherwise 1
             outputs.append(
                 K.conv2d(
-                    K.reverse(inputs[..., 5], -2),
+                    K.reverse(inputs[:, :, 5, :, :], 2) if channels_first else K.reverse(inputs[:, 5], 1),
                     self.north_pole_kernel if self.independent_north_pole else self.polar_kernel,
                     strides=self.strides,
                     padding=self.padding,
@@ -948,7 +951,7 @@ class CubeSphereConv2D(Layer):
         else:
             outputs.append(
                 K.conv2d(
-                    inputs[..., 5],
+                    inputs[:, :, 5, :, :] if channels_first else inputs[:, 5],
                     self.north_pole_kernel if self.independent_north_pole else self.polar_kernel,
                     strides=self.strides,
                     padding=self.padding,
@@ -963,10 +966,10 @@ class CubeSphereConv2D(Layer):
                 data_format=self.data_format
             )
         if self.flip_north_pole:
-            outputs[5] = K.reverse(outputs[5], -2)
-        outputs[5] = K.expand_dims(outputs[5], -1)
+            outputs[5] = K.reverse(outputs[5], 2 if channels_first else 1)
+        outputs[5] = K.expand_dims(outputs[5], 2 if channels_first else 1)
 
-        outputs = K.concatenate(outputs, axis=-1)
+        outputs = K.concatenate(outputs, axis=2 if channels_first else 1)
 
         if self.activation is not None:
             return self.activation(outputs)
@@ -974,7 +977,8 @@ class CubeSphereConv2D(Layer):
 
     def compute_output_shape(self, input_shape):
         if self.data_format == 'channels_last':
-            space = input_shape[1:-3]
+            # batch, face, height, width, ...
+            space = input_shape[2:4]
             new_space = []
             for i in range(len(space)):
                 new_dim = conv_utils.conv_output_length(
@@ -984,9 +988,10 @@ class CubeSphereConv2D(Layer):
                     stride=self.strides[i],
                     dilation=self.dilation_rate[i])
                 new_space.append(new_dim)
-            return (input_shape[0],) + tuple(new_space) + (self.filters, 6)
+            return (input_shape[0], 6) + tuple(new_space) + (self.filters,)
         if self.data_format == 'channels_first':
-            space = input_shape[2:-1]
+            # batch, channels, ..., face, height, width
+            space = input_shape[-2:]
             new_space = []
             for i in range(len(space)):
                 new_dim = conv_utils.conv_output_length(
@@ -996,7 +1001,7 @@ class CubeSphereConv2D(Layer):
                     stride=self.strides[i],
                     dilation=self.dilation_rate[i])
                 new_space.append(new_dim)
-            return (input_shape[0], self.filters) + tuple(new_space) + (6,)
+            return (input_shape[0], self.filters, 6) + tuple(new_space)
 
     def get_config(self):
         config = {
@@ -1035,138 +1040,246 @@ class CubeSpherePadding2D(ZeroPadding3D):
 
     # Arguments
         padding: int
-        data_format: 'channels_first'
+        data_format: 'channels_first' or 'channels_last'
     """
 
     def __init__(self,
-                 padding=1,
+                 padding=(1, 1),
                  data_format='channels_first',
                  **kwargs):
-        data_format = K.normalize_data_format(data_format)
-        if data_format != 'channels_first':
-            raise ValueError("CubeSpherePadding2D must have 'channels_first' order")
+        data_format = conv_utils.normalize_data_format(data_format)
         super(CubeSpherePadding2D, self).__init__(padding=padding,
                                                   data_format=data_format,
                                                   **kwargs)
-        if self.padding[0] != self.padding[1]:
-            raise ValueError("CubeSpherePadding2D must have the same padding in the height and width dimensions")
-        if self.padding[0][0] != self.padding[0][1]:
-            raise ValueError("CubeSpherePadding2D must have equal padding on opposite edges")
-        self.padding = self.padding[:2] + ((0, 0),)
+        self.padding = ((0, 0),) + self.padding[1:]
 
     def call(self, inputs):
-        p = self.padding[0][0]
-        tr = (0, 1, 3, 2)
+        p = self.padding[1][0]
 
-        # Pad the equatorial upper/lower boundaries and the polar upper/lower boundaries
-        out = list()
-        # Face 0
-        out.append(K.expand_dims(
-            K.concatenate([
-                inputs[:, :, -p:, :, 4],
-                inputs[..., 0],
-                inputs[:, :, :p, :, 5]
-            ], axis=2), -1
-        ))
-        # Face 1
-        out.append(K.expand_dims(
-            K.concatenate([
-                tf.transpose(inputs[:, :, ::-1, -p:, 4], tr),
-                inputs[..., 1],
-                tf.transpose(K.reverse(inputs[:, :, :, -p:, 5], 3), tr)
-            ], axis=2), -1
-        ))
-        # Face 2
-        out.append(K.expand_dims(
-            K.concatenate([
-                K.reverse(inputs[:, :, :p, ::-1, 4], 2),
-                inputs[..., 2],
-                K.reverse(inputs[:, :, -p:, ::-1, 5], 2)
-            ], axis=2), -1
-        ))
-        # Face 3
-        out.append(K.expand_dims(
-            K.concatenate([
-                tf.transpose(K.reverse(inputs[:, :, :, :p, 4], 3), tr),
-                inputs[..., 3],
-                tf.transpose(inputs[:, :, ::-1, :p, 5], tr)
-            ], axis=2), -1
-        ))
-        # Face 4 (south pole)
-        out.append(K.expand_dims(
-            K.concatenate([
-                K.reverse(inputs[:, :, :p, ::-1, 2], 2),
-                inputs[..., 4],
-                inputs[:, :, :p, :, 0]
-            ], axis=2), -1
-        ))
-        # Face 5 (north pole)
-        out.append(K.expand_dims(
-            K.concatenate([
-                inputs[:, :, -p:, :, 0],
-                inputs[..., 5],
-                K.reverse(inputs[:, :, -p:, ::-1, 2], 2)
-            ], axis=2), -1
-        ))
+        if self.data_format == 'channels_first':
+            tr = (0, 1, 3, 2)
 
-        del inputs
-        out1 = K.concatenate(out, axis=-1)
-        del out
+            # Pad the equatorial upper/lower boundaries and the polar upper/lower boundaries
+            out = list()
+            # Face 0
+            out.append(K.expand_dims(
+                K.concatenate([
+                    inputs[:, :, 4, -p:, :],
+                    inputs[:, :, 0],
+                    inputs[:, :, 5, :p, :]
+                ], axis=2), 2
+            ))
+            # Face 1
+            out.append(K.expand_dims(
+                K.concatenate([
+                    tf.transpose(inputs[:, :, 4, ::-1, -p:], tr),
+                    inputs[:, :, 1],
+                    tf.transpose(K.reverse(inputs[:, :, 5, :, -p:], 3), tr)
+                ], axis=2), 2
+            ))
+            # Face 2
+            out.append(K.expand_dims(
+                K.concatenate([
+                    K.reverse(inputs[:, :, 4, :p, ::-1], 2),
+                    inputs[:, :, 2],
+                    K.reverse(inputs[:, :, 5, -p:, ::-1], 2)
+                ], axis=2), 2
+            ))
+            # Face 3
+            out.append(K.expand_dims(
+                K.concatenate([
+                    tf.transpose(K.reverse(inputs[:, :, 4, :, :p], 3), tr),
+                    inputs[:, :, 3],
+                    tf.transpose(inputs[:, :, 5, ::-1, :p], tr)
+                ], axis=2), 2
+            ))
+            # Face 4 (south pole)
+            out.append(K.expand_dims(
+                K.concatenate([
+                    K.reverse(inputs[:, :, 2, :p, ::-1], 2),
+                    inputs[:, :, 4],
+                    inputs[:, :, 0, :p, :]
+                ], axis=2), 2
+            ))
+            # Face 5 (north pole)
+            out.append(K.expand_dims(
+                K.concatenate([
+                    inputs[:, :, 0, -p:, :],
+                    inputs[:, :, 5],
+                    K.reverse(inputs[:, :, 2, -p:, ::-1], 2)
+                ], axis=2), 2
+            ))
 
-        # Pad the equatorial periodic lateral boundaries and the polar left/right boundaries
-        out = list()
-        # Face 0
-        out.append(K.expand_dims(
-            K.concatenate([
-                out1[:, :, :, -p:, 3],
-                out1[..., 0],
-                out1[:, :, :, :p, 1]
-            ], axis=3), -1
-        ))
-        # Face 1
-        out.append(K.expand_dims(
-            K.concatenate([
-                out1[:, :, :, -p:, 0],
-                out1[..., 1],
-                out1[:, :, :, :p, 2]
-            ], axis=3), -1
-        ))
-        # Face 2
-        out.append(K.expand_dims(
-            K.concatenate([
-                out1[:, :, :, -p:, 1],
-                out1[..., 2],
-                out1[:, :, :, :p, 3]
-            ], axis=3), -1
-        ))
-        # Face 3
-        out.append(K.expand_dims(
-            K.concatenate([
-                out1[:, :, :, -p:, 2],
-                out1[..., 3],
-                out1[:, :, :, :p, 0]
-            ], axis=3), -1
-        ))
-        # Face 4
-        out.append(K.expand_dims(
-            K.concatenate([
-                tf.transpose(K.reverse(out[3][:, :, p:2*p, :, 0], 2), tr),
-                out1[..., 4],
-                tf.transpose(out[1][:, :, p:2*p, ::-1, 0], tr)
-            ], axis=3), -1
-        ))
-        # Face 5
-        out.append(K.expand_dims(
-            K.concatenate([
-                tf.transpose(out[3][:, :, -2*p:-p, ::-1, 0], tr),
-                out1[..., 5],
-                tf.transpose(K.reverse(out[1][:, :, -2*p:-p, :, 0], 2), tr)
-            ], axis=3), -1
-        ))
+            out1 = K.concatenate(out, axis=2)
+            del out
 
-        del out1
-        outputs = K.concatenate(out, axis=-1)
-        return outputs
+            # Pad the equatorial periodic lateral boundaries and the polar left/right boundaries
+            out = list()
+            # Face 0
+            out.append(K.expand_dims(
+                K.concatenate([
+                    out1[:, :, 3, :, -p:],
+                    out1[:, :, 0],
+                    out1[:, :, 1, :, :p]
+                ], axis=3), 2
+            ))
+            # Face 1
+            out.append(K.expand_dims(
+                K.concatenate([
+                    out1[:, :, 0, :, -p:],
+                    out1[:, :, 1],
+                    out1[:, :, 2, :, :p]
+                ], axis=3), 2
+            ))
+            # Face 2
+            out.append(K.expand_dims(
+                K.concatenate([
+                    out1[:, :, 1, :, -p:],
+                    out1[:, :, 2],
+                    out1[:, :, 3, :, :p]
+                ], axis=3), 2
+            ))
+            # Face 3
+            out.append(K.expand_dims(
+                K.concatenate([
+                    out1[:, :, 2, :, -p:],
+                    out1[:, :, 3],
+                    out1[:, :, 0, :, :p]
+                ], axis=3), 2
+            ))
+            # Face 4
+            out.append(K.expand_dims(
+                K.concatenate([
+                    tf.transpose(K.reverse(out[3][:, :, 0, p:2*p, :], 2), tr),
+                    out1[:, :, 4],
+                    tf.transpose(out[1][:, :, 0, p:2*p, ::-1], tr)
+                ], axis=3), 2
+            ))
+            # Face 5
+            out.append(K.expand_dims(
+                K.concatenate([
+                    tf.transpose(out[3][:, :, 0, -2*p:-p, ::-1], tr),
+                    out1[:, :, 5],
+                    tf.transpose(K.reverse(out[1][:, :, 0, -2*p:-p, :], 2), tr)
+                ], axis=3), 2
+            ))
+
+            del out1
+            outputs = K.concatenate(out, axis=2)
+            del out
+            return outputs
+
+        else:  # channels_last
+            tr = (0, 2, 1, 3)
+            # Pad the equatorial upper/lower boundaries and the polar upper/lower boundaries
+            out = list()
+            # Face 0
+            out.append(K.expand_dims(
+                K.concatenate([
+                    inputs[:, 4, -p:, :],
+                    inputs[:, 0],
+                    inputs[:, 5, :p, :]
+                ], axis=1), 1
+            ))
+            # Face 1
+            out.append(K.expand_dims(
+                K.concatenate([
+                    tf.transpose(inputs[:, 4, ::-1, -p:], tr),
+                    inputs[:, 1],
+                    tf.transpose(K.reverse(inputs[:, 5, :, -p:], 2), tr)
+                ], axis=1), 1
+            ))
+            # Face 2
+            out.append(K.expand_dims(
+                K.concatenate([
+                    K.reverse(inputs[:, 4, :p, ::-1], 1),
+                    inputs[:, 2],
+                    K.reverse(inputs[:, 5, -p:, ::-1], 1)
+                ], axis=1), 1
+            ))
+            # Face 3
+            out.append(K.expand_dims(
+                K.concatenate([
+                    tf.transpose(K.reverse(inputs[:, 4, :, :p], 2), tr),
+                    inputs[:, 3],
+                    tf.transpose(inputs[:, 5, ::-1, :p], tr)
+                ], axis=1), 1
+            ))
+            # Face 4 (south pole)
+            out.append(K.expand_dims(
+                K.concatenate([
+                    K.reverse(inputs[:, 2, :p, ::-1], 1),
+                    inputs[:, 4],
+                    inputs[:, 0, :p, :]
+                ], axis=1), 1
+            ))
+            # Face 5 (north pole)
+            out.append(K.expand_dims(
+                K.concatenate([
+                    inputs[:, 0, -p:, :],
+                    inputs[:, 5],
+                    K.reverse(inputs[:, 2, -p:, ::-1], 1)
+                ], axis=1), 1
+            ))
+
+            out1 = K.concatenate(out, axis=1)
+            del out
+
+            # Pad the equatorial periodic lateral boundaries and the polar left/right boundaries
+            out = list()
+            # Face 0
+            out.append(K.expand_dims(
+                K.concatenate([
+                    out1[:, 3, :, -p:],
+                    out1[:, 0],
+                    out1[:, 1, :, :p]
+                ], axis=2), 1
+            ))
+            # Face 1
+            out.append(K.expand_dims(
+                K.concatenate([
+                    out1[:, 0, :, -p:],
+                    out1[:, 1],
+                    out1[:, 2, :, :p]
+                ], axis=2), 1
+            ))
+            # Face 2
+            out.append(K.expand_dims(
+                K.concatenate([
+                    out1[:, 1, :, -p:],
+                    out1[:, 2],
+                    out1[:, 3, :, :p]
+                ], axis=2), 1
+            ))
+            # Face 3
+            out.append(K.expand_dims(
+                K.concatenate([
+                    out1[:, 2, :, -p:],
+                    out1[:, 3],
+                    out1[:, 0, :, :p]
+                ], axis=2), 1
+            ))
+            # Face 4
+            out.append(K.expand_dims(
+                K.concatenate([
+                    tf.transpose(K.reverse(out[3][:, 0, p:2 * p, :], 1), tr),
+                    out1[:, 4],
+                    tf.transpose(out[1][:, 0, p:2 * p, ::-1], tr)
+                ], axis=2), 1
+            ))
+            # Face 5
+            out.append(K.expand_dims(
+                K.concatenate([
+                    tf.transpose(out[3][:, 0, -2 * p:-p, ::-1], tr),
+                    out1[:, 5],
+                    tf.transpose(K.reverse(out[1][:, 0, -2 * p:-p, :], 1), tr)
+                ], axis=2), 1
+            ))
+
+            del out1
+            outputs = K.concatenate(out, axis=1)
+            del out
+            return outputs
 
 
 # ==================================================================================================================== #
@@ -1537,8 +1650,8 @@ def anomaly_correlation_loss(mean=None, regularize_mean='mse', reverse=True):
 
 
 # Compatibility names
-lat_loss = latitude_weighted_loss()
-acc_loss = anomaly_correlation_loss()
+# lat_loss = latitude_weighted_loss()
+# acc_loss = anomaly_correlation_loss()
 
 
 # ==================================================================================================================== #

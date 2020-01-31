@@ -8,11 +8,6 @@
 Example of training a DLWP model on the cubed sphere with the Keras functional API.
 """
 
-import tensorflow as tf
-print(tf.__version__)
-import keras
-print(keras.__version__)
-
 import argparse
 import os
 import shutil
@@ -24,21 +19,24 @@ from datetime import datetime
 from DLWP.model import DLWPFunctional, ArrayDataGenerator
 from DLWP.model.preprocessing import get_constants, prepare_data_array
 from DLWP.util import save_model
-from keras.callbacks import TensorBoard
+from tensorflow.keras.callbacks import TensorBoard
 from azureml.core import Run
 
-from keras.layers import Input, UpSampling3D, AveragePooling3D, concatenate, ReLU, Reshape, Concatenate
+from tensorflow.keras.layers import Input, UpSampling3D, AveragePooling3D, concatenate, ReLU, Reshape, Concatenate, \
+    Permute
 from DLWP.custom import CubeSpherePadding2D, CubeSphereConv2D, RNNResetStates, EarlyStoppingMin, \
     RunHistory, SaveWeightsOnEpoch
-from keras.models import Model
-import keras.backend as K
+from tensorflow.keras.models import Model
+from tensorflow.keras.optimizers import Adam
 
-# Set a TF session with memory growth
 import tensorflow as tf
-config = tf.ConfigProto()
-config.gpu_options.allow_growth = True
-# config.gpu_options.visible_device_list = '1'
-K.set_session(tf.Session(config=config))
+# Disable warning logging
+tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
+# Set only GPU 0
+device = tf.config.list_physical_devices('GPU')[0]
+# tf.config.set_visible_devices([device], 'GPU')
+# Allow memory growth
+tf.config.experimental.set_memory_growth(device, True)
 
 
 #%% Parse user arguments
@@ -63,7 +61,7 @@ if args.temp_dir != 'None':
 
 if args.seed >= 0:
     np.random.seed(args.seed)
-    tf.set_random_seed(args.seed)
+    tf.compat.v1.set_random_seed(args.seed)
 
 
 #%% Parameters
@@ -77,18 +75,18 @@ reverse_lat = False
 
 # Optional paths to files containing constant fields to add to the inputs
 constant_fields = [
-    (os.path.join(root_directory, 'era5/era5_2deg_3h_CS_land_sea_mask.nc'), 'lsm'),
-    (os.path.join(root_directory, 'era5/era5_2deg_3h_CS_scaled_topo.nc'), 'z')
+    (os.path.join(root_directory, 'era5/era5_2deg_3h_CS2_land_sea_mask.nc'), 'lsm'),
+    (os.path.join(root_directory, 'era5/era5_2deg_3h_CS2_scaled_topo.nc'), 'z')
 ]
 
 # NN parameters. Regularization is applied to LSTM layers by default. weight_loss indicates whether to weight the
 # loss function preferentially in the mid-latitudes.
 cnn_model_name = 'unet2'
-base_filter_number = 48
+base_filter_number = 32
 min_epochs = 100
 max_epochs = 1000
 patience = 50
-batch_size = 32
+batch_size = 64
 loss_by_step = None
 shuffle = True
 independent_north_pole = False
@@ -115,8 +113,8 @@ use_keras_fit = False
 # Validation set to use. Either an integer (number of validation samples, taken from the end), or an iterable of
 # pandas datetime objects. The train set can be set to the first <integer> samples, an iterable of dates, or None to
 # simply use the remaining points. Match the type of validation_set.
-validation_set = list(pd.date_range(datetime(2013, 1, 1, 0), datetime(2016, 12, 31, 18), freq='3H'))
-train_set = list(pd.date_range(datetime(1979, 1, 1, 6), datetime(2012, 12, 31, 18), freq='3H'))
+validation_set = list(pd.date_range(datetime(2013, 1, 1, 0), datetime(2013, 2, 28, 18), freq='3H'))
+train_set = list(pd.date_range(datetime(1979, 1, 1, 0), datetime(1979, 12, 31, 18), freq='3H'))
 
 
 #%% Open data
@@ -162,7 +160,7 @@ train_array, input_ind, output_ind, sol = prepare_data_array(train_data, input_s
 generator = ArrayDataGenerator(dlwp, train_array, rank=3, input_slice=input_ind, output_slice=output_ind,
                                input_time_steps=io_time_steps, output_time_steps=io_time_steps,
                                sequence=integration_steps, interval=data_interval, insolation_array=sol,
-                               batch_size=batch_size, shuffle=shuffle, constants=constants)
+                               batch_size=batch_size, shuffle=shuffle, constants=constants, channels_last=True)
 if use_keras_fit:
     p_train, t_train = generator.generate([])
 if validation_data is not None:
@@ -172,7 +170,7 @@ if validation_data is not None:
     val_generator = ArrayDataGenerator(dlwp, val_array, rank=3, input_slice=input_ind, output_slice=output_ind,
                                        input_time_steps=io_time_steps, output_time_steps=io_time_steps,
                                        sequence=integration_steps, interval=data_interval, insolation_array=sol,
-                                       batch_size=batch_size, shuffle=shuffle, constants=constants)
+                                       batch_size=batch_size, shuffle=shuffle, constants=constants, channels_last=True)
     if use_keras_fit:
         val = val_generator.generate([])
 else:
@@ -196,16 +194,16 @@ main_input = Input(shape=cs, name='main_input')
 if input_solar:
     solar_inputs = [Input(shape=generator.insolation_shape, name='solar_%d' % d) for d in range(1, integration_steps)]
 if has_constants:
-    constant_input = Input(shape=constants.shape, name='constants')
-cube_padding_1 = CubeSpherePadding2D(1, data_format='channels_first')
-pooling_2 = AveragePooling3D((2, 2, 1), data_format='channels_first')
-up_sampling_2 = UpSampling3D((2, 2, 1), data_format='channels_first')
+    constant_input = Input(shape=(6, 48, 48, 2), name='constants')
+cube_padding_1 = CubeSpherePadding2D(1, data_format='channels_last')
+pooling_2 = AveragePooling3D((1, 2, 2), data_format='channels_last')
+up_sampling_2 = UpSampling3D((1, 2, 2), data_format='channels_last')
 relu = ReLU(negative_slope=0.1, max_value=10.)
 conv_kwargs = {
     'dilation_rate': 1,
     'padding': 'valid',
     'activation': 'linear',
-    'data_format': 'channels_first',
+    'data_format': 'channels_last',
     'independent_north_pole': independent_north_pole,
     'flip_north_pole': not independent_north_pole
 }
@@ -229,7 +227,7 @@ conv_2d_6_3 = CubeSphereConv2D(base_filter_number * 2, 3, **conv_kwargs)
 conv_2d_7 = CubeSphereConv2D(base_filter_number, 3, **conv_kwargs)
 conv_2d_7_2 = CubeSphereConv2D(base_filter_number, 3, **conv_kwargs)
 conv_2d_7_3 = CubeSphereConv2D(base_filter_number, 3, **conv_kwargs)
-conv_2d_8 = CubeSphereConv2D(cso[0], 1, **conv_kwargs)
+conv_2d_8 = CubeSphereConv2D(cso[-1], 1, **conv_kwargs)
 
 
 # Define the model functions.
@@ -265,11 +263,11 @@ def unet(x):
     x2 = cube_padding_1(x2)
     x2 = relu(conv_2d_3(x2))
     x2 = up_sampling_2(x2)
-    x = concatenate([x2, x1], axis=1)
+    x = concatenate([x2, x1], axis=-1)
     x = cube_padding_1(x)
     x = relu(conv_2d_6(x))
     x = up_sampling_2(x)
-    x = concatenate([x, x0], axis=1)
+    x = concatenate([x, x0], axis=-1)
     x = cube_padding_1(x)
     x = relu(conv_2d_7(x))
     x = cube_padding_1(x)
@@ -294,13 +292,13 @@ def unet2(x):
     x2 = cube_padding_1(x2)
     x2 = relu(conv_2d_5(x2))
     x2 = up_sampling_2(x2)
-    x = concatenate([x2, x1], axis=1)
+    x = concatenate([x2, x1], axis=-1)
     x = cube_padding_1(x)
     x = relu(conv_2d_6_2(x))
     x = cube_padding_1(x)
     x = relu(conv_2d_6(x))
     x = up_sampling_2(x)
-    x = concatenate([x, x0], axis=1)
+    x = concatenate([x, x0], axis=-1)
     x = cube_padding_1(x)
     x = relu(conv_2d_7(x))
     x = cube_padding_1(x)
@@ -331,7 +329,7 @@ def unet3(x):
     x2 = cube_padding_1(x2)
     x2 = relu(conv_2d_5(x2))
     x2 = up_sampling_2(x2)
-    x = concatenate([x2, x1], axis=1)
+    x = concatenate([x2, x1], axis=-1)
     x = cube_padding_1(x)
     x = relu(conv_2d_6_3(x))
     x = cube_padding_1(x)
@@ -339,7 +337,7 @@ def unet3(x):
     x = cube_padding_1(x)
     x = relu(conv_2d_6(x))
     x = up_sampling_2(x)
-    x = concatenate([x, x0], axis=1)
+    x = concatenate([x, x0], axis=-1)
     x = cube_padding_1(x)
     x = relu(conv_2d_7(x))
     x = cube_padding_1(x)
@@ -371,19 +369,19 @@ def unet4(x):
     x3 = cube_padding_1(x3)
     x3 = relu(conv_2d_4(x3))
     x3 = up_sampling_2(x3)
-    x = concatenate([x3, x2], axis=1)
+    x = concatenate([x3, x2], axis=-1)
     x = cube_padding_1(x)
     x = relu(conv_2d_5_2(x))
     x = cube_padding_1(x)
     x = relu(conv_2d_5(x))
     x = up_sampling_2(x)
-    x = concatenate([x, x1], axis=1)
+    x = concatenate([x, x1], axis=-1)
     x = cube_padding_1(x)
     x = relu(conv_2d_6_2(x))
     x = cube_padding_1(x)
     x = relu(conv_2d_6(x))
     x = up_sampling_2(x)
-    x = concatenate([x, x0], axis=1)
+    x = concatenate([x, x0], axis=-1)
     x = cube_padding_1(x)
     x = relu(conv_2d_7(x))
     x = cube_padding_1(x)
@@ -398,16 +396,16 @@ def complete_model(x_in):
     is_seq = isinstance(x_in, (list, tuple))
     xi = x_in[0] if is_seq else x_in
     if is_seq and has_constants:
-        xi = Concatenate(axis=1)([xi, x_in[-1]])
+        xi = Concatenate(axis=-1)([xi, x_in[-1]])
     outputs.append(model_function(xi))
     for step in range(1, integration_steps):
         xo = outputs[step - 1]
         if is_seq and input_solar:
-            xo = Reshape(generator.shape)(xo)
-            xo = Concatenate(axis=2)([xo, x_in[step]])
+            xo = Reshape(cs[:-1] + (io_time_steps, -1))(xo)
+            xo = Concatenate(axis=-1)([xo, Permute((2, 3, 4, 1, 5))(x_in[step])])
             xo = Reshape(cs)(xo)
         if is_seq and has_constants:
-            xo = Concatenate(axis=1)([xo, x_in[-1]])
+            xo = Concatenate(axis=-1)([xo, x_in[-1]])
         outputs.append(model_function(xo))
 
     return outputs
@@ -430,7 +428,8 @@ if loss_by_step is None:
     loss_by_step = [1./integration_steps] * integration_steps
 
 # Build the DLWP model
-dlwp.build_model(model, loss=loss_function, loss_weights=loss_by_step, optimizer='adam', metrics=['mae'], gpus=n_gpu)
+opt = tf.train.experimental.enable_mixed_precision_graph_rewrite(Adam())
+dlwp.build_model(model, loss=loss_function, loss_weights=loss_by_step, optimizer=opt, metrics=['mae'], gpus=n_gpu)
 print(dlwp.base_model.summary())
 
 
@@ -444,7 +443,7 @@ history = RunHistory(run)
 early = EarlyStoppingMin(monitor='val_loss' if val_generator is not None else 'loss', min_delta=0.,
                          min_epochs=min_epochs, max_epochs=max_epochs, patience=patience,
                          restore_best_weights=True, verbose=1)
-tensorboard = TensorBoard(log_dir=log_directory, batch_size=batch_size, update_freq='epoch')
+tensorboard = TensorBoard(log_dir=log_directory, update_freq='epoch')
 save = SaveWeightsOnEpoch(weights_file=model_file + '.keras.tmp', interval=25)
 
 if use_keras_fit:

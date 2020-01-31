@@ -74,6 +74,9 @@ class DLWPTorchNN(object):
 
         self.history = {}
 
+        # DLWP >= 0.9.0 compatibility
+        self.FHW_DIMS = True
+
     def build_model(self, layers, optimizer, loss, optimizer_kwargs=None, loss_kwargs=None,
                     metric='L1Loss', metric_kwargs=None):
         """

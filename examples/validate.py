@@ -8,7 +8,7 @@
 Simple routines for graphically evaluating the performance of a DLWP model.
 """
 
-import keras.backend as K
+import tensorflow as tf
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -273,7 +273,7 @@ for m, model in enumerate(models):
     # Clear the model
     dlwp = None
     time_series = None
-    K.clear_session()
+    tf.compat.v1.keras.backend.clear_session()
 
 
 #%% Add Barotropic model

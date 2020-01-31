@@ -17,17 +17,18 @@ from datetime import datetime
 
 from DLWP.model import SeriesDataGenerator, TimeSeriesEstimator
 from DLWP.model.preprocessing import get_constants
-from DLWP.util import load_model, remove_chars
+from DLWP.util import load_model, remove_chars, is_channels_last
 from DLWP.model import verify
 from DLWP.remap import CubeSphereRemap
 
-# Set a TF session with memory growth
 import tensorflow as tf
-import keras.backend as K
-config = tf.ConfigProto()
-config.gpu_options.allow_growth = True
-config.gpu_options.visible_device_list = '1'
-K.set_session(tf.Session(config=config))
+# Disable warning logging
+tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
+# Set only GPU 1
+device = tf.config.list_physical_devices('GPU')[1]
+tf.config.set_visible_devices([device], 'GPU')
+# Allow memory growth
+tf.config.experimental.set_memory_growth(device, True)
 
 
 #%% User parameters
@@ -35,8 +36,8 @@ K.set_session(tf.Session(config=config))
 # Configure the data files. The predictor file contains the predictors for the model, already on the cubed sphere,
 # with the conversion to the face coordinate. The scale file contains 'mean' and 'std' variables to perform inverse
 # scaling back to real data units.
-root_directory = '/home/disk/wave2/jweyn/Data/DLWP'
-predictor_file = '%s/era5_2deg_3h_CS_1979-2018_z-tau-t2_500-1000_tcwv_psi850.nc' % root_directory
+root_directory = '/home/gold/jweyn/Data'
+predictor_file = os.path.join(root_directory, 'era5_2deg_3h_CS2_1979-2018_z-tau-t2_500-1000_tcwv_psi850.nc')
 scale_file = '%s/era5_2deg_scale_z-tau-t2_500-1000_tcwv_psi850.nc' % root_directory
 
 # If True, reverse the latitude coordinate in the predicted output
@@ -47,38 +48,38 @@ map_files = ('/home/disk/brume/jweyn/Documents/DLWP/map_LL91x180_CS48.nc',
              '/home/disk/brume/jweyn/Documents/DLWP/map_CS48_LL91x180.nc')
 
 # Names of model files, located in the root_directory, and labels for those models
-model = 'dlwp_era5_6h-3_CS48_tau-sfc1000-tcwv-lsm-topo_UNET2-relumax'
-model_label = '5-variable U-net CNN TCWV'
-file_suffix = '_20170710'
+model = 'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2-relumax-2'
+model_label = '4-variable U-net CNN FHW'
+file_suffix = '_20170110'
 
 constant_fields = [
-    (os.path.join(root_directory, 'era5_2deg_3h_CS_land_sea_mask.nc'), 'lsm'),
-    (os.path.join(root_directory, 'era5_2deg_3h_CS_scaled_topo.nc'), 'z')
+    (os.path.join(root_directory, 'era5_2deg_3h_CS2_land_sea_mask.nc'), 'lsm'),
+    (os.path.join(root_directory, 'era5_2deg_3h_CS2_scaled_topo.nc'), 'z')
 ]
 
 # Optional list of selections to make from the predictor dataset for each model. This is useful if, for example,
 # you want to examine models that have different numbers of vertical levels but one predictor dataset contains
 # the data that all models need. Separate input and output selections are available for models using different inputs
 # and outputs. Also specify the number of input/output time steps in each model.
-input_selection = {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0', 'tcwv/0']}
-output_selection = {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0', 'tcwv/0']}
+input_selection = {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0']}
+output_selection = {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0']}
 add_insolation = True
 input_time_steps = 2
 output_time_steps = 2
 
 # Selection of continuous dates in the data to use as input series.
-start_date = datetime(2017, 6, 30, 0)
-end_date = datetime(2017, 7, 31, 18)
+start_date = datetime(2016, 12, 30, 0)
+end_date = datetime(2017, 1, 31, 18)
 validation_set = pd.date_range(start_date, end_date, freq='6H')
 validation_set = np.array(validation_set, dtype='datetime64[ns]')
 
 # Select forecast initialization times. These are the actual forecast start times we will run the model and verification
 # for, and will also correspond to the comparison model forecast start times.
-dates = pd.date_range('2017-07-01', '2017-07-10', freq='D')
+dates = pd.date_range('2017-01-01', '2017-01-10', freq='D')
 initialization_dates = xr.DataArray(dates)
 
 # Number of forward integration weather forecast time steps
-num_forecast_hours = 365 * 24
+num_forecast_hours = 28 * 24
 dt = 6
 
 # Scale the variables to original units
@@ -120,8 +121,8 @@ else:
     val_generator = SeriesDataGenerator(dlwp, predictor_ds, rank=3, add_insolation=add_insolation,
                                         input_sel=input_selection, output_sel=output_selection,
                                         input_time_steps=input_time_steps, output_time_steps=output_time_steps,
-                                        constants=constants,
-                                        sequence=sequence, batch_size=64, load=False)
+                                        constants=constants, shuffle=False, sequence=sequence, batch_size=32,
+                                        load=False, channels_last=is_channels_last(dlwp))
 
     estimator = TimeSeriesEstimator(dlwp, val_generator)
 
@@ -130,6 +131,10 @@ else:
     samples = np.array([int(np.where(val_generator.ds['sample'] == s)[0]) for s in initialization_dates]) \
         - input_time_steps + 1
     time_series = estimator.predict(num_forecast_steps, samples=samples, verbose=1)
+
+    # Transpose if channels_last was used for the model
+    if is_channels_last(dlwp):
+        time_series = time_series.transpose('f_hour', 'time', 'varlev', 'x0', 'x1', 'x2')
 
     # Scale the time series. Smart enough to align dimensions without expand_dims
     if scale_variables:

@@ -16,8 +16,8 @@ from importlib import import_module
 from copy import copy
 import numpy as np
 import pandas as pd
-import keras.models
-from keras.utils import multi_gpu_model
+from tensorflow.keras import models as keras_models
+from tensorflow.keras.utils import multi_gpu_model
 
 
 # ==================================================================================================================== #
@@ -33,7 +33,7 @@ def make_keras_picklable():
     def __getstate__(self):
         model_str = ""
         with tempfile.NamedTemporaryFile(suffix='.hdf5', delete=True) as fd:
-            keras.models.save_model(self, fd.name, overwrite=True)
+            keras_models.save_model(self, fd.name, overwrite=True)
             model_str = fd.read()
         d = {'model_str': model_str}
         return d
@@ -42,10 +42,10 @@ def make_keras_picklable():
         with tempfile.NamedTemporaryFile(suffix='.hdf5', delete=True) as fd:
             fd.write(state['model_str'])
             fd.flush()
-            model = keras.models.load_model(fd.name)
+            model = keras_models.load_model(fd.name)
         self.__dict__ = model.__dict__
 
-    cls = keras.models.Model
+    cls = keras_models.Model
     cls.__getstate__ = __getstate__
     cls.__setstate__ = __setstate__
 
@@ -172,12 +172,12 @@ def load_model(file_name, history=False, custom_objects=None, gpus=1):
     custom_objects = custom_objects or {}
     custom_objects.update(get_classes('DLWP.custom'))
     custom_objects.update(get_methods('DLWP.custom'))
-    loaded_model = keras.models.load_model('%s.keras' % file_name, custom_objects=custom_objects, compile=True)
+    loaded_model = keras_models.load_model('%s.keras' % file_name, custom_objects=custom_objects, compile=True)
     # If multiple GPUs are requested, copy the model to the GPUs
     if gpus > 1:
         import tensorflow as tf
         with tf.device('/cpu:0'):
-            model.base_model = keras.models.clone_model(loaded_model)
+            model.base_model = keras_models.clone_model(loaded_model)
             model.base_model.set_weights(loaded_model.get_weights())
         model.model = multi_gpu_model(model.base_model, gpus=gpus)
         model.gpus = gpus
@@ -429,3 +429,16 @@ def remove_chars(s):
     :return: str
     """
     return ''.join(re.split('[$/\\\\]', s))
+
+
+def is_channels_last(model):
+    """
+    Programmatically determine whether a DLWP model, likely loaded from disk, uses channels_last data format.
+
+    :param model: DLWPNeuralNet or DLWPFunctional instance
+    :return: bool: True if the model uses channels_last data format
+    """
+    for layer in model.model.layers:
+        if hasattr(layer, 'data_format'):
+            return layer.data_format == 'channels_last'
+    return False

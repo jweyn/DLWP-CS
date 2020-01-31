@@ -18,18 +18,18 @@ from datetime import datetime
 from DLWP.model import DLWPNeuralNet, SeriesDataGenerator
 from DLWP.util import save_model, train_test_split_ind
 from DLWP.custom import RNNResetStates, EarlyStoppingMin, latitude_weighted_loss, anomaly_correlation_loss
-from keras.regularizers import l2
-from keras.losses import mean_squared_error
-from keras.callbacks import History, TensorBoard
+
+from tensorflow.keras.losses import mean_squared_error
+from tensorflow.keras.callbacks import History, TensorBoard
 
 
 #%% Parameters
 
 # File paths and names
-root_directory = '/home/disk/wave2/jweyn/Data/DLWP'
-predictor_file = os.path.join(root_directory, 'cfs_6h_CS48_1979-2010_z500_tau300-700.nc')
-model_file = os.path.join(root_directory, 'dlwp_6h_CS48_tau_relu')
-log_directory = os.path.join(root_directory, 'logs', 'CS48-tau-relu')
+root_directory = '/home/gold/jweyn/Data'
+predictor_file = os.path.join(root_directory, 'era5_2deg_3h_CS2_1979-2018_z-tau-t2_500-1000_tcwv_psi850.nc')
+model_file = os.path.join(root_directory, 'dlwp_era5_6h-3_CS48_tau-relu-2')
+log_directory = os.path.join(root_directory, 'logs', 'era5_6h-3_CS48_tau-relu-2')
 
 # NN parameters. Regularization is applied to LSTM layers by default. weight_loss indicates whether to weight the
 # loss function preferentially in the mid-latitudes.
@@ -47,13 +47,13 @@ shuffle = True
 # Data parameters. Specify the input variables/levels, output variables/levels, and time steps in/out. Note that for
 # LSTM layers, the model can only predict effectively if the output time steps is 1 or equal to the input time steps.
 # Ensure that the selections use LISTS of values (even for only 1) to keep dimensions correct.
-input_selection = {'varlev': ['HGT/500', 'THICK/300-700']}
-output_selection = {'varlev': ['HGT/500', 'THICK/300-700']}
+input_selection = {'varlev': ['z/500', 'tau/300-700']}
+output_selection = {'varlev': ['z/500', 'tau/300-700']}
 input_time_steps = 2
 output_time_steps = 2
 step_interval = 1
 # Add incoming solar radiation forcing
-add_solar = False
+add_solar = True
 
 # If system memory permits, loading the predictor data can greatly increase efficiency when training on GPUs, if the
 # train computation takes less time than the data loading.
@@ -117,14 +117,15 @@ if load_memory or use_keras_fit:
 generator = SeriesDataGenerator(dlwp, train_data, rank=3, input_sel=input_selection, output_sel=output_selection,
                                 input_time_steps=input_time_steps, output_time_steps=output_time_steps,
                                 batch_size=batch_size, add_insolation=add_solar, load=load_memory, shuffle=shuffle,
-                                interval=step_interval)
+                                interval=step_interval, channels_last=True)
 if use_keras_fit:
     p_train, t_train = generator.generate([])
 if validation_data is not None:
     val_generator = SeriesDataGenerator(dlwp, validation_data, rank=3, input_sel=input_selection,
                                         output_sel=output_selection, input_time_steps=input_time_steps,
-                                        output_time_steps=output_time_steps,batch_size=batch_size,
-                                        add_insolation=add_solar, load=load_memory, interval=step_interval)
+                                        output_time_steps=output_time_steps, batch_size=batch_size,
+                                        add_insolation=add_solar, load=load_memory, interval=step_interval,
+                                        channels_last=True)
     if use_keras_fit:
         val = val_generator.generate([])
 else:
@@ -140,57 +141,57 @@ cs = generator.convolution_shape
 cso = generator.output_convolution_shape
 layers = (
     ('CubeSpherePadding2D', (1,), {
-        'data_format': 'channels_first',
+        'data_format': 'channels_last',
         'input_shape': cs
     }),
     ('CubeSphereConv2D', (32, 3), {
         'dilation_rate': 1,
         'padding': 'valid',
         'activation': 'linear',
-        'data_format': 'channels_first'
+        'data_format': 'channels_last'
     }),
     ('ReLU', (), {'max_value': 1.}),
-    ('MaxPooling3D', ((2, 2, 1),), {'data_format': 'channels_first'}),
-    ('CubeSpherePadding2D', (1,), {'data_format': 'channels_first'}),
+    ('MaxPooling3D', ((1, 2, 2),), {'data_format': 'channels_last'}),
+    ('CubeSpherePadding2D', (1,), {'data_format': 'channels_last'}),
     ('CubeSphereConv2D', (64, 3), {
         'dilation_rate': 1,
         'padding': 'valid',
         'activation': 'linear',
-        'data_format': 'channels_first'
+        'data_format': 'channels_last'
     }),
     ('ReLU', (), {'max_value': 1.}),
-    ('MaxPooling3D', ((2, 2, 1),), {'data_format': 'channels_first'}),
-    ('CubeSpherePadding2D', (1,), {'data_format': 'channels_first'}),
+    ('MaxPooling3D', ((1, 2, 2),), {'data_format': 'channels_last'}),
+    ('CubeSpherePadding2D', (1,), {'data_format': 'channels_last'}),
     ('CubeSphereConv2D', (128, 3), {
         'dilation_rate': 1,
         'padding': 'valid',
         'activation': 'linear',
-        'data_format': 'channels_first'
+        'data_format': 'channels_last'
     }),
     ('ReLU', (), {'max_value': 1.}),
-    ('UpSampling3D', ((2, 2, 1),), {'data_format': 'channels_first'}),
-    ('CubeSpherePadding2D', (1,), {'data_format': 'channels_first'}),
+    ('UpSampling3D', ((1, 2, 2),), {'data_format': 'channels_last'}),
+    ('CubeSpherePadding2D', (1,), {'data_format': 'channels_last'}),
     ('CubeSphereConv2D', (64, 3), {
         'dilation_rate': 1,
         'padding': 'valid',
         'activation': 'linear',
-        'data_format': 'channels_first'
+        'data_format': 'channels_last'
     }),
     ('ReLU', (), {'max_value': 1.}),
-    ('UpSampling3D', ((2, 2, 1),), {'data_format': 'channels_first'}),
-    ('CubeSpherePadding2D', (1,), {'data_format': 'channels_first'}),
+    ('UpSampling3D', ((1, 2, 2),), {'data_format': 'channels_last'}),
+    ('CubeSpherePadding2D', (1,), {'data_format': 'channels_last'}),
     ('CubeSphereConv2D', (32, 3), {
         'dilation_rate': 1,
         'padding': 'valid',
         'activation': 'linear',
-        'data_format': 'channels_first'
+        'data_format': 'channels_last'
     }),
     ('ReLU', (), {'max_value': 1.}),
-    ('CubeSpherePadding2D', (1,), {'data_format': 'channels_first'}),
-    ('CubeSphereConv2D', (cso[0], 3), {
+    ('CubeSpherePadding2D', (1,), {'data_format': 'channels_last'}),
+    ('CubeSphereConv2D', (cso[-1], 3), {
         'padding': 'valid',
         'activation': 'linear',
-        'data_format': 'channels_first',
+        'data_format': 'channels_last',
     })
 )
 
