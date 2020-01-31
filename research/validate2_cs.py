@@ -8,7 +8,6 @@
 Simple routines for graphically evaluating the performance of a DLWP model on the cubed sphere.
 """
 
-import tensorflow as tf
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -26,11 +25,14 @@ from DLWP.plot import history_plot, zonal_mean_plot
 from DLWP.util import load_model, train_test_split_ind, remove_chars, is_channels_last
 from DLWP.remap import CubeSphereRemap
 
-# Set a TF session with memory growth
-config = tf.compat.v1.ConfigProto()
-config.gpu_options.allow_growth = True
-config.gpu_options.visible_device_list = '1'
-tf.compat.v1.keras.backend.set_session(tf.compat.v1.Session(config=config))
+import tensorflow as tf
+# Disable warning logging
+tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
+# Set only GPU 1
+device = tf.config.list_physical_devices('GPU')[1]
+tf.config.set_visible_devices([device], 'GPU')
+# Allow memory growth
+tf.config.experimental.set_memory_growth(device, True)
 
 
 #%% User parameters
@@ -50,26 +52,16 @@ map_files = ('/home/disk/brume/jweyn/Documents/DLWP/map_LL91x180_CS48.nc',
 
 # Names of model files, located in the root_directory, and labels for those models
 models = [
-    # 'dlwp_era5_6h_CS48_tau-sfc1000-lsm_UNET2',
-    # 'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2',
     'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2-relumax',
-    'dlwp_era5_6h-3_CS48_tau-sfc1000-tcwv-lsm-topo_UNET2-relumax',
-    # 'dlwp_era5_6h-3_CS48_tau-sfc1000-psi-lsm-topo_UNET2-relumax',
-    # 'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm_UNET2-relumax',
-    # 'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2-relumax5',
-    # 'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2-relu0',
-    # 'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2-relu0max1',
+    'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2-48-relumax',
+    'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2-64-relumax',
+    # 'dlwp_era5_6h-3_CS48_tau-sfc1000-tcwv-lsm-topo_UNET2-relumax',
 ]
 model_labels = [
-    # 'ERA-6h SFC4 LSM UNET2 ReLU-N',
-    # 'ERA-6h (x3) SFC4 LSM TOPO UNET2 ReLU-N',
     '4-variable U-net',
-    '5-variable U-net TCWV',
-    # '5-variable U-net CNN (Psi$_{850}$)'
-    # '4-variable U-net CNN, no topo',
-    # 'ERA-6h (x3) SFC4 LSM TOPO UNET2 ReLU-N-5',
-    # 'ERA-6h (x3) SFC4 LSM TOPO UNET2 ReLU-0',
-    # 'ERA-6h (x3) SFC4 LSM TOPO UNET2 ReLU-0-1',
+    '4-variable U-net-48',
+    '4-variable U-net-64',
+    # '5-variable U-net CNN (TCWV)'
 ]
 
 # Optional list of selections to make from the predictor dataset for each model. This is useful if, for example,
@@ -78,8 +70,9 @@ model_labels = [
 # and outputs. Also specify the number of input/output time steps in each model.
 input_selection = output_selection = [
     {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0']},
-    {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0', 'tcwv/0']},
     {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0']},
+    {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0']},
+    # {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0', 'tcwv/0']},
 ]
 
 # Optional added constant inputs
@@ -88,27 +81,7 @@ constant_fields = [
         (os.path.join(root_directory, 'era5_2deg_3h_CS_land_sea_mask.nc'), 'lsm'),
         (os.path.join(root_directory, 'era5_2deg_3h_CS_scaled_topo.nc'), 'z')
     ],
-    [
-        (os.path.join(root_directory, 'era5_2deg_3h_CS_land_sea_mask.nc'), 'lsm'),
-        (os.path.join(root_directory, 'era5_2deg_3h_CS_scaled_topo.nc'), 'z')
-    ],
-    [
-        (os.path.join(root_directory, 'era5_2deg_3h_CS_land_sea_mask.nc'), 'lsm'),
-        (os.path.join(root_directory, 'era5_2deg_3h_CS_scaled_topo.nc'), 'z')
-    ],
-    [
-        (os.path.join(root_directory, 'era5_2deg_3h_CS_land_sea_mask.nc'), 'lsm'),
-        # (os.path.join(root_directory, 'era5_2deg_3h_CS_scaled_topo.nc'), 'z')
-    ],
-    [
-        (os.path.join(root_directory, 'era5_2deg_3h_CS_land_sea_mask.nc'), 'lsm'),
-        (os.path.join(root_directory, 'era5_2deg_3h_CS_scaled_topo.nc'), 'z')
-    ],
-    [
-        (os.path.join(root_directory, 'era5_2deg_3h_CS_land_sea_mask.nc'), 'lsm'),
-        (os.path.join(root_directory, 'era5_2deg_3h_CS_scaled_topo.nc'), 'z')
-    ],
-]
+] * len(models)
 
 # Other required parameters
 add_insolation = [True] * len(models)
@@ -169,8 +142,8 @@ plot_spread = False
 plot_mean = False
 method = 'rmse'
 mse_title = r'Z500; 2013-16; global'  # '20-70$^{\circ}$N'
-mse_file_name = 'rmse_era_6h_CS48_z500-tcwv.pdf'
-mse_pkl_file = 'rmse_era_6h_CS48_z500-tcwv.pkl'
+mse_file_name = 'rmse_era_6h_CS48_z500-unet64.pdf'
+mse_pkl_file = 'rmse_era_6h_CS48_z500-unet64.pkl'
 
 
 #%% Pre-processing
@@ -281,7 +254,9 @@ for m, model in enumerate(models):
         # Create data generator
         constants = get_constants(constant_fields[m])
         sequence = dlwp._n_steps if hasattr(dlwp, '_n_steps') and dlwp._n_steps > 1 else None
-        val_generator = SeriesDataGenerator(dlwp, predictor_ds, rank=3, add_insolation=add_insolation[m],
+        predictor_val_ds = predictor_ds if hasattr(dlwp, 'FHW_DIMS') else \
+            predictor_ds.transpose('sample', 'varlev', 'height', 'width', 'face')
+        val_generator = SeriesDataGenerator(dlwp, predictor_val_ds, rank=3, add_insolation=add_insolation[m],
                                             input_sel=input_selection[m], output_sel=output_selection[m],
                                             input_time_steps=input_time_steps[m],
                                             output_time_steps=output_time_steps[m],
@@ -307,7 +282,7 @@ for m, model in enumerate(models):
         time_series = verify.add_metadata_to_forecast_cs(
             time_series.values,
             fh,
-            predictor_ds.sel(**output_selection[m]).sel(sample=verification.time)
+            predictor_val_ds.sel(**output_selection[m]).sel(sample=verification.time)
         )
         time_series = time_series.sel(**selection)
 

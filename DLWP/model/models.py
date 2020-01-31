@@ -58,6 +58,9 @@ class DLWPNeuralNet(object):
         else:
             self._is_init_fit = False
 
+        # DLWP >= 0.9.0 compatibility
+        self.FHW_DIMS = True
+
     def build_model(self, layers=(), gpus=1, **compile_kwargs):
         """
         Build a Keras Sequential model using the specified layers. Each element of layers must be a tuple consisting of
@@ -343,6 +346,9 @@ class DLWPFunctional(object):
         self.base_model = None
         self.model = None
         self.gpus = 1
+
+        # DLWP >= 0.9.0 compatibility
+        self.FHW_DIMS = True
 
     def build_model(self, model, gpus=1, **compile_kwargs):
         """

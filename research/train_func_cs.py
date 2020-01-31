@@ -23,14 +23,16 @@ from tensorflow.keras.layers import Input, UpSampling3D, AveragePooling3D, conca
     Permute
 from DLWP.custom import CubeSpherePadding2D, CubeSphereConv2D, RNNResetStates, EarlyStoppingMin, SaveWeightsOnEpoch
 from tensorflow.keras.models import Model
-
-# Set a TF session with memory growth
-import tensorflow as tf
 from tensorflow.keras.optimizers import Adam
-# config = tf.compat.v1.ConfigProto()
-# config.gpu_options.allow_growth = True
-# # config.gpu_options.visible_device_list = '1'
-# tf.compat.v1.keras.backend.set_session(tf.compat.v1.Session(config=config))
+
+import tensorflow as tf
+# Disable warning logging
+tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
+# Set only GPU 0
+device = tf.config.list_physical_devices('GPU')[0]
+tf.config.set_visible_devices([device], 'GPU')
+# Allow memory growth
+tf.config.experimental.set_memory_growth(device, True)
 
 
 #%% Parameters
@@ -38,8 +40,8 @@ from tensorflow.keras.optimizers import Adam
 # File paths and names
 root_directory = '/home/gold/jweyn/Data'
 predictor_file = os.path.join(root_directory, 'era5_2deg_3h_CS2_1979-2018_z-tau-t2_500-1000_tcwv_psi850.nc')
-model_file = os.path.join(root_directory, 'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2-relumax-2')
-log_directory = os.path.join(root_directory, 'logs', 'era5_6h-3_CS48_tau-sfc1000-lsm_UNET2-relumax-2')
+model_file = os.path.join(root_directory, 'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2-relumax-TC')
+log_directory = os.path.join(root_directory, 'logs', 'era5_6h-3_CS48_tau-sfc1000-lsm_UNET2-relumax-TC')
 reverse_lat = False
 
 # Optional paths to files containing constant fields to add to the inputs
@@ -85,8 +87,8 @@ use_keras_fit = False
 # Validation set to use. Either an integer (number of validation samples, taken from the end), or an iterable of
 # pandas datetime objects. The train set can be set to the first <integer> samples, an iterable of dates, or None to
 # simply use the remaining points. Match the type of validation_set.
-validation_set = list(pd.date_range(datetime(2013, 1, 1, 0), datetime(2013, 2, 28, 18), freq='3H'))
-train_set = list(pd.date_range(datetime(1979, 1, 1, 0), datetime(1979, 12, 31, 18), freq='3H'))
+validation_set = list(pd.date_range(datetime(2013, 1, 1, 0), datetime(2016, 12, 31, 18), freq='3H'))
+train_set = list(pd.date_range(datetime(1979, 1, 1, 0), datetime(2012, 12, 31, 18), freq='3H'))
 
 
 #%% Open data
@@ -388,8 +390,8 @@ if loss_by_step is None:
     loss_by_step = [1./integration_steps] * integration_steps
 
 # Build the DLWP model
-# opt = tf.train.experimental.enable_mixed_precision_graph_rewrite(Adam())
-dlwp.build_model(model, loss=loss_function, loss_weights=loss_by_step, optimizer='adam', metrics=['mae'], gpus=n_gpu)
+opt = tf.train.experimental.enable_mixed_precision_graph_rewrite(Adam())
+dlwp.build_model(model, loss=loss_function, loss_weights=loss_by_step, optimizer=opt, metrics=['mae'], gpus=n_gpu)
 print(dlwp.base_model.summary())
 
 

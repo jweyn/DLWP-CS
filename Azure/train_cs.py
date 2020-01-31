@@ -27,14 +27,16 @@ from tensorflow.keras.layers import Input, UpSampling3D, AveragePooling3D, conca
 from DLWP.custom import CubeSpherePadding2D, CubeSphereConv2D, RNNResetStates, EarlyStoppingMin, \
     RunHistory, SaveWeightsOnEpoch
 from tensorflow.keras.models import Model
+from tensorflow.keras.optimizers import Adam
 
-# Set a TF session with memory growth
 import tensorflow as tf
-print(tf.__version__)
-config = tf.compat.v1.ConfigProto()
-config.gpu_options.allow_growth = True
-# config.gpu_options.visible_device_list = '1'
-tf.compat.v1.keras.backend.set_session(tf.compat.v1.Session(config=config))
+# Disable warning logging
+tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
+# Set only GPU 0
+device = tf.config.list_physical_devices('GPU')[0]
+# tf.config.set_visible_devices([device], 'GPU')
+# Allow memory growth
+tf.config.experimental.set_memory_growth(device, True)
 
 
 #%% Parse user arguments
@@ -73,18 +75,18 @@ reverse_lat = False
 
 # Optional paths to files containing constant fields to add to the inputs
 constant_fields = [
-    (os.path.join(root_directory, 'era5/era5_2deg_3h_CS_land_sea_mask.nc'), 'lsm'),
-    (os.path.join(root_directory, 'era5/era5_2deg_3h_CS_scaled_topo.nc'), 'z')
+    (os.path.join(root_directory, 'era5/era5_2deg_3h_CS2_land_sea_mask.nc'), 'lsm'),
+    (os.path.join(root_directory, 'era5/era5_2deg_3h_CS2_scaled_topo.nc'), 'z')
 ]
 
 # NN parameters. Regularization is applied to LSTM layers by default. weight_loss indicates whether to weight the
 # loss function preferentially in the mid-latitudes.
 cnn_model_name = 'unet2'
-base_filter_number = 48
+base_filter_number = 32
 min_epochs = 100
 max_epochs = 1000
 patience = 50
-batch_size = 32
+batch_size = 64
 loss_by_step = None
 shuffle = True
 independent_north_pole = False
@@ -111,8 +113,8 @@ use_keras_fit = False
 # Validation set to use. Either an integer (number of validation samples, taken from the end), or an iterable of
 # pandas datetime objects. The train set can be set to the first <integer> samples, an iterable of dates, or None to
 # simply use the remaining points. Match the type of validation_set.
-validation_set = list(pd.date_range(datetime(2013, 1, 1, 0), datetime(2016, 12, 31, 18), freq='3H'))
-train_set = list(pd.date_range(datetime(1979, 1, 1, 6), datetime(2012, 12, 31, 18), freq='3H'))
+validation_set = list(pd.date_range(datetime(2013, 1, 1, 0), datetime(2013, 2, 28, 18), freq='3H'))
+train_set = list(pd.date_range(datetime(1979, 1, 1, 0), datetime(1979, 12, 31, 18), freq='3H'))
 
 
 #%% Open data
@@ -426,8 +428,8 @@ if loss_by_step is None:
     loss_by_step = [1./integration_steps] * integration_steps
 
 # Build the DLWP model
-# opt = tf.train.experimental.enable_mixed_precision_graph_rewrite(Adam())
-dlwp.build_model(model, loss=loss_function, loss_weights=loss_by_step, optimizer='adam', metrics=['mae'], gpus=n_gpu)
+opt = tf.train.experimental.enable_mixed_precision_graph_rewrite(Adam())
+dlwp.build_model(model, loss=loss_function, loss_weights=loss_by_step, optimizer=opt, metrics=['mae'], gpus=n_gpu)
 print(dlwp.base_model.summary())
 
 
@@ -441,7 +443,7 @@ history = RunHistory(run)
 early = EarlyStoppingMin(monitor='val_loss' if val_generator is not None else 'loss', min_delta=0.,
                          min_epochs=min_epochs, max_epochs=max_epochs, patience=patience,
                          restore_best_weights=True, verbose=1)
-tensorboard = TensorBoard(log_dir=log_directory, batch_size=batch_size, update_freq='epoch')
+tensorboard = TensorBoard(log_dir=log_directory, update_freq='epoch')
 save = SaveWeightsOnEpoch(weights_file=model_file + '.keras.tmp', interval=25)
 
 if use_keras_fit:
