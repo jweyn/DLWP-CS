@@ -254,9 +254,7 @@ for m, model in enumerate(models):
         # Create data generator
         constants = get_constants(constant_fields[m])
         sequence = dlwp._n_steps if hasattr(dlwp, '_n_steps') and dlwp._n_steps > 1 else None
-        predictor_val_ds = predictor_ds if hasattr(dlwp, 'FHW_DIMS') else \
-            predictor_ds.transpose('sample', 'varlev', 'height', 'width', 'face')
-        val_generator = SeriesDataGenerator(dlwp, predictor_val_ds, rank=3, add_insolation=add_insolation[m],
+        val_generator = SeriesDataGenerator(dlwp, predictor_ds, rank=3, add_insolation=add_insolation[m],
                                             input_sel=input_selection[m], output_sel=output_selection[m],
                                             input_time_steps=input_time_steps[m],
                                             output_time_steps=output_time_steps[m],
@@ -282,7 +280,7 @@ for m, model in enumerate(models):
         time_series = verify.add_metadata_to_forecast_cs(
             time_series.values,
             fh,
-            predictor_val_ds.sel(**output_selection[m]).sel(sample=verification.time)
+            predictor_ds.sel(**output_selection[m]).sel(sample=verification.time)
         )
         time_series = time_series.sel(**selection)
 

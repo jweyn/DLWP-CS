@@ -182,6 +182,22 @@ class SaveWeightsOnEpoch(Callback):
                 pass
 
 
+class GeneratorEpochEnd(Callback):
+    """
+    Used in conjunction with a tensorflow.data.Dataset generator to manually execute the on_epoch_end() method of a
+    DLWP.model.generators Generator instance after each epoch.
+    """
+    def __init__(self, generator):
+        """
+        :param generator: DLWP.model.generator instance
+        """
+        super(GeneratorEpochEnd, self).__init__()
+        self.generator = generator
+
+    def on_epoch_end(self, epoch, logs=None):
+        self.generator.on_epoch_end()
+
+
 # ==================================================================================================================== #
 # Keras padding layers
 # ==================================================================================================================== #

@@ -275,7 +275,7 @@ def add_metadata_to_forecast(forecast, f_hour, meta_ds, f_hour_timedelta_type=Tr
     forecast = xr.DataArray(
         forecast,
         coords=[f_hour] + [meta_ds[d] for d in dims_order],
-        dims=['f_hour'] + dims_order,
+        dims=['f_hour'] + ['time' if d == 'sample' else d for d in dims_order],
         name='forecast'
     )
     return forecast
@@ -312,7 +312,7 @@ def add_metadata_to_forecast_cs(forecast, f_hour, meta_ds, f_hour_timedelta_type
     forecast = xr.DataArray(
         forecast,
         coords=[f_hour] + [meta_ds[d] for d in dims_order],
-        dims=['f_hour'] + dims_order,
+        dims=['f_hour'] + ['time' if d == 'sample' else d for d in dims_order],
         name='forecast'
     )
     return forecast

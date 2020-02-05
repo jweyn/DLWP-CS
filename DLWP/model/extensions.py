@@ -13,7 +13,7 @@ import xarray as xr
 import pandas as pd
 from .models import DLWPNeuralNet, DLWPFunctional
 from .models_torch import DLWPTorchNN
-from .generators import DataGenerator, SmartDataGenerator, SeriesDataGenerator
+from .generators import DataGenerator, SeriesDataGenerator, ArrayDataGenerator
 from ..util import insolation
 import warnings
 
@@ -34,7 +34,7 @@ class TimeSeriesEstimator(object):
         """
         if not isinstance(model, (DLWPNeuralNet, DLWPFunctional, DLWPTorchNN)):
             raise TypeError("'model' must be a valid instance of a DLWP model class")
-        if not isinstance(generator, (DataGenerator, SmartDataGenerator, SeriesDataGenerator)):
+        if not isinstance(generator, (DataGenerator, SeriesDataGenerator, ArrayDataGenerator)):
             raise TypeError("'generator' must be a valid instance of a DLWP generator class")
         if isinstance(model, DLWPFunctional):
             warnings.warn('DLWPFunctional models are only partially supported by TimeSeriesEstimator. The '
@@ -44,7 +44,7 @@ class TimeSeriesEstimator(object):
         self._add_insolation = generator._add_insolation if hasattr(generator, '_add_insolation') else False
         self._uses_varlev = 'varlev' in generator.ds.dims
         self._has_targets = 'targets' in generator.ds.variables
-        self._is_series = isinstance(generator, (SeriesDataGenerator, SmartDataGenerator))
+        self._is_series = isinstance(generator, (SeriesDataGenerator, ArrayDataGenerator))
         self._output_sel = {}
         self._input_sel = {}
         self._dt = self.generator.ds['sample'][1] - self.generator.ds['sample'][0]
