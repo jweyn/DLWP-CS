@@ -48,9 +48,9 @@ map_files = ('/home/disk/brume/jweyn/Documents/DLWP/map_LL91x180_CS48.nc',
              '/home/disk/brume/jweyn/Documents/DLWP/map_CS48_LL91x180.nc')
 
 # Names of model files, located in the root_directory, and labels for those models
-model = 'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2-relumax-2'
-model_label = '4-variable U-net CNN FHW'
-file_suffix = '_20170110'
+model = 'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2-relumax'
+model_label = '4-variable U-net CNN'
+file_suffix = '_20171210'
 
 constant_fields = [
     (os.path.join(root_directory, 'era5_2deg_3h_CS2_land_sea_mask.nc'), 'lsm'),
@@ -68,18 +68,18 @@ input_time_steps = 2
 output_time_steps = 2
 
 # Selection of continuous dates in the data to use as input series.
-start_date = datetime(2016, 12, 30, 0)
-end_date = datetime(2017, 1, 31, 18)
+start_date = datetime(2017, 12, 1, 0)
+end_date = datetime(2018, 12, 31, 18)
 validation_set = pd.date_range(start_date, end_date, freq='6H')
 validation_set = np.array(validation_set, dtype='datetime64[ns]')
 
 # Select forecast initialization times. These are the actual forecast start times we will run the model and verification
 # for, and will also correspond to the comparison model forecast start times.
-dates = pd.date_range('2017-01-01', '2017-01-10', freq='D')
+dates = pd.date_range('2017-12-01', '2017-12-10', freq='D')
 initialization_dates = xr.DataArray(dates)
 
 # Number of forward integration weather forecast time steps
-num_forecast_hours = 28 * 24
+num_forecast_hours = 365 * 24
 dt = 6
 
 # Scale the variables to original units

@@ -80,9 +80,9 @@ load_memory = 'minimal'
 # Use multiple GPUs, if available
 n_gpu = 1
 
-# Force use of the keras model.fit() method. May run faster in some instances, but uses (input_time_steps +
-# output_time_steps) times more memory.
-use_keras_fit = False
+# Pre-load the validation set in memory. Uses quite a bit of memory, but may be required with TensorFlow 2.x which does
+# not play nicely with multiprocessing generators.
+load_validation_set = False
 
 # Validation set to use. Either an integer (number of validation samples, taken from the end), or an iterable of
 # pandas datetime objects. The train set can be set to the first <integer> samples, an iterable of dates, or None to
@@ -123,8 +123,6 @@ generator = ArrayDataGenerator(dlwp, train_array, rank=3, input_slice=input_ind,
                                input_time_steps=io_time_steps, output_time_steps=io_time_steps,
                                sequence=integration_steps, interval=data_interval, insolation_array=sol,
                                batch_size=batch_size, shuffle=shuffle, constants=constants, channels_last=True)
-if use_keras_fit:
-    p_train, t_train = generator.generate([])
 if validation_data is not None:
     print('Loading validation data to memory...')
     val_array, input_ind, output_ind, sol = prepare_data_array(validation_data, input_sel=io_selection,
@@ -133,11 +131,13 @@ if validation_data is not None:
                                        input_time_steps=io_time_steps, output_time_steps=io_time_steps,
                                        sequence=integration_steps, interval=data_interval, insolation_array=sol,
                                        batch_size=batch_size, shuffle=shuffle, constants=constants, channels_last=True)
-    if use_keras_fit:
+    if load_validation_set:
         val = val_generator.generate([])
+        del val_array
+        del sol
 else:
     val_generator = None
-    if use_keras_fit:
+    if load_validation_set:
         val = None
 
 total_time = time.time() - start_time
@@ -402,18 +402,22 @@ start_time = time.time()
 print('Begin training...')
 # run = Run.get_context()
 history = History()
-early = EarlyStoppingMin(monitor='val_loss' if val_generator is not None else 'loss', min_delta=0.,
+early = EarlyStoppingMin(monitor='val_loss' if validation_data is not None else 'loss', min_delta=0.,
                          min_epochs=min_epochs, max_epochs=max_epochs, patience=patience,
                          restore_best_weights=True, verbose=1)
 tensorboard = TensorBoard(log_dir=log_directory, update_freq='epoch')
 save = SaveWeightsOnEpoch(weights_file=model_file + '.keras.tmp', interval=25)
 
-if use_keras_fit:
-    dlwp.fit(p_train, t_train, batch_size=batch_size, epochs=max_epochs+1, verbose=1, validation_data=val,
-             callbacks=[history, RNNResetStates(), early])
-else:
-    dlwp.fit_generator(generator, epochs=max_epochs+1, verbose=1, validation_data=val_generator,
-                       use_multiprocessing=True, workers=4, callbacks=[history, RNNResetStates(), early, save])
+try:
+    dlwp.model.load_weights('%s.keras.tmp' % model_file)
+    print('Loaded weights from existing model temporary file')
+except OSError:
+    pass
+
+dlwp.fit_generator(generator, epochs=max_epochs+1, verbose=1,
+                   validation_data=val if load_validation_set else val_generator,
+                   use_multiprocessing=True, workers=1,
+                   callbacks=[history, RNNResetStates(), early, save])
 end_time = time.time()
 
 # Save the model
@@ -424,6 +428,9 @@ if model_file is not None:
 # Evaluate the model
 print("\nTrain time -- %s seconds --" % (end_time - start_time))
 if validation_data is not None:
-    score = dlwp.evaluate(*val_generator.generate([]), verbose=0)
+    if load_validation_set:
+        score = dlwp.evaluate(*val, verbose=0)
+    else:
+        score = dlwp.evaluate(*val_generator.generate([]), verbose=0)
     print('Validation loss:', score[0])
     print('Validation mean absolute error:', score[1])
