@@ -226,7 +226,7 @@ class DLWPNeuralNet(object):
         if isinstance(generator, (DataGenerator, SeriesDataGenerator, ArrayDataGenerator)):
             if not self._is_init_fit:
                 raise AttributeError('DLWPNeuralNet has not been initialized for fitting with init_fit()')
-        self.model.fit_generator(generator, **kwargs)
+        self.model.fit(generator, **kwargs)
 
     def predict(self, predictors, **kwargs):
         """
@@ -403,7 +403,7 @@ class DLWPFunctional(object):
         :param generator: a generator for producing batches of data (see Keras docs), e.g., DataGenerator below
         :param kwargs: passed to the model's fit_generator() method
         """
-        self.model.fit_generator(generator, **kwargs)
+        self.model.fit(generator, **kwargs)
 
     def predict(self, predictors, **kwargs):
         """

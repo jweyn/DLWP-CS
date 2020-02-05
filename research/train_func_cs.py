@@ -410,7 +410,8 @@ try:
 except:
     pass
 
-dlwp.fit_generator(tf_train_data, epochs=max_epochs + 1, verbose=1, validation_data=tf_val_data,
+dlwp.fit_generator(tf_train_data, epochs=max_epochs + 1, steps_per_epoch=len(generator),
+                   verbose=1, validation_data=tf_val_data,
                    callbacks=[history, RNNResetStates(), early, save, GeneratorEpochEnd(generator)])
 end_time = time.time()
 
