@@ -131,7 +131,7 @@ if validation_data is not None:
     val_generator = ArrayDataGenerator(dlwp, val_array, rank=3, input_slice=input_ind, output_slice=output_ind,
                                        input_time_steps=io_time_steps, output_time_steps=io_time_steps,
                                        sequence=integration_steps, interval=data_interval, insolation_array=sol,
-                                       batch_size=batch_size, shuffle=shuffle, constants=constants, channels_last=True)
+                                       batch_size=batch_size, shuffle=False, constants=constants, channels_last=True)
     tf_val_data = tf_data_generator(val_generator, input_names=input_names)
 else:
     tf_val_data = None
@@ -396,7 +396,6 @@ print(dlwp.base_model.summary())
 # Train and evaluate the model
 start_time = time.time()
 print('Begin training...')
-# run = Run.get_context()
 history = History()
 early = EarlyStoppingMin(monitor='val_loss' if validation_data is not None else 'loss', min_delta=0.,
                          min_epochs=min_epochs, max_epochs=max_epochs, patience=patience,
@@ -410,7 +409,7 @@ try:
 except:
     pass
 
-dlwp.fit_generator(tf_train_data, epochs=max_epochs + 1, steps_per_epoch=len(generator),
+dlwp.fit_generator(tf_train_data, epochs=max_epochs + 1,
                    verbose=1, validation_data=tf_val_data,
                    callbacks=[history, RNNResetStates(), early, save, GeneratorEpochEnd(generator)])
 end_time = time.time()

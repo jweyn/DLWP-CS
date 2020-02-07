@@ -42,7 +42,7 @@ tf.config.experimental.set_memory_growth(device, True)
 # forward and inverse mapping so that it is processed the same way. It should also contain the mean and std of the
 # validation variables.
 root_directory = '/home/disk/wave2/jweyn/Data/DLWP'
-predictor_file = '%s/era5_2deg_3h_CS_1979-2018_z-tau-t2_500-1000_tcwv_psi850.nc' % root_directory
+predictor_file = '/home/gold/jweyn/Data/era5_2deg_3h_CS2_1979-2018_z-tau-t2_500-1000_tcwv_psi850.nc'
 validation_file = '%s/era5_2deg_3h_validation_z500_t2m_ILL.nc' % root_directory
 climo_file = '%s/era5_2deg_3h_1979-2010_climatology_z500-z1000-t2.nc' % root_directory
 
@@ -53,15 +53,13 @@ map_files = ('/home/disk/brume/jweyn/Documents/DLWP/map_LL91x180_CS48.nc',
 # Names of model files, located in the root_directory, and labels for those models
 models = [
     'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2-relumax',
-    'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2-48-relumax',
-    'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2-64-relumax',
-    # 'dlwp_era5_6h-3_CS48_tau-sfc1000-tcwv-lsm-topo_UNET2-relumax',
+    'dlwp_era5_6h-3_CS48_tau-sfc1000-tcwv-lsm-topo_UNET2-relumax',
+    'dlwp_era5_6h-3_CS48_tau-sfc1000-tcwv-lsm-topo_UNET2-48-relumax',
 ]
 model_labels = [
     '4-variable U-net',
-    '4-variable U-net-48',
-    '4-variable U-net-64',
-    # '5-variable U-net CNN (TCWV)'
+    '5-variable U-net (TCWV)',
+    '5-variable U-net-48 (TCWV)',
 ]
 
 # Optional list of selections to make from the predictor dataset for each model. This is useful if, for example,
@@ -70,16 +68,15 @@ model_labels = [
 # and outputs. Also specify the number of input/output time steps in each model.
 input_selection = output_selection = [
     {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0']},
-    {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0']},
-    {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0']},
-    # {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0', 'tcwv/0']},
+    {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0', 'tcwv/0']},
+    {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0', 'tcwv/0']},
 ]
 
 # Optional added constant inputs
 constant_fields = [
     [
-        (os.path.join(root_directory, 'era5_2deg_3h_CS_land_sea_mask.nc'), 'lsm'),
-        (os.path.join(root_directory, 'era5_2deg_3h_CS_scaled_topo.nc'), 'z')
+        ('/home/gold/jweyn/Data/era5_2deg_3h_CS2_land_sea_mask.nc', 'lsm'),
+        ('/home/gold/jweyn/Data/era5_2deg_3h_CS2_scaled_topo.nc', 'z')
     ],
 ] * len(models)
 
@@ -140,10 +137,10 @@ plot_zonal = True
 plot_mse = True
 plot_spread = False
 plot_mean = False
-method = 'rmse'
+method = 'acc'
 mse_title = r'Z500; 2013-16; global'  # '20-70$^{\circ}$N'
-mse_file_name = 'rmse_era_6h_CS48_z500-unet64.pdf'
-mse_pkl_file = 'rmse_era_6h_CS48_z500-unet64.pkl'
+mse_file_name = 'acc_era_6h_CS48_z500-tcwv.pdf'
+mse_pkl_file = 'acc_era_6h_CS48_z500-tcwv.pkl'
 
 
 #%% Pre-processing
@@ -221,8 +218,11 @@ if daily_mean:
 
 # Load the climatology data
 if climo_file is None:
-    climo_data = remapped_ds['predictors'].isel(
-        lat=((remapped_ds.lat >= lat_min) & (remapped_ds.lat <= lat_max))).sel(**selection)
+    print('Generating climatology...')
+    climo_data = verify.daily_climatology(remapped_ds['predictors']
+                                          .isel(lat=((remapped_ds.lat >= lat_min) & (remapped_ds.lat <= lat_max)))
+                                          .sel(**selection)
+                                          .rename({'sample': 'time'}))
 else:
     print('Opening climatology from %s...' % climo_file)
     climo_ds = xr.open_dataset(climo_file)
@@ -231,7 +231,10 @@ else:
         lat=((climo_ds.lat >= lat_min) & (climo_ds.lat <= lat_max))).sel(**selection)
 if scale_variables:
     climo_data = climo_data * sel_std + sel_mean
-acc_climo = climo_data.mean(*tuple(d for d in climo_data.dims if d not in ['lat', 'lon']))
+acc_climo = verify.daily_climo_time_series(climo_data, verification.time.values, verification.f_hour.values)
+if daily_mean:
+    acc_climo['f_day'] = xr.DataArray(np.floor((acc_climo.f_hour.values - 1) / 24. + 1), dims=['f_hour'])
+    acc_climo = acc_climo.groupby('f_day').mean('f_hour')
 
 
 #%% Iterate through the models and calculate their stats
@@ -438,9 +441,10 @@ if plot_mse:
                          facecolor=(0.5, 0.5, 0.5, 0.5), zorder=-50)
         plt.xlim([0, num_forecast_hours // 24])
         plt.xticks(np.arange(0, num_forecast_hours // 24 + 1, 2))
-        plt.ylim(bottom=0)
         if method in ['acc', 'cos']:
             plt.ylim(top=1)
+        else:
+            plt.ylim(bottom=0)
         plt.legend(loc='best', fontsize=8)
         plt.grid(True, color='lightgray', zorder=-100)
         plt.xlabel('forecast day')
@@ -463,9 +467,10 @@ if plot_mse:
             plt.plot(f_hours[0] / 24, np.mean(np.array(mse[:len(models)]), axis=0), label='mean', linewidth=2.)
         plt.xlim([0, num_forecast_hours // 24])
         plt.xticks(np.arange(0, num_forecast_hours // 24 + 1, 2))
-        plt.ylim(bottom=0)
         if method in ['acc', 'cos']:
             plt.ylim(top=1)
+        else:
+            plt.ylim(bottom=0)
         plt.legend(loc='best', fontsize=8)
         plt.grid(True, color='lightgray', zorder=-100)
         plt.xlabel('forecast day')

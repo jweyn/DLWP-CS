@@ -34,7 +34,7 @@ def forecast_error(forecast, valid, method='mse', axis=None, weighted=False, cli
         according to the latitude
     :param climatology: ndarray or DataArray: mean climatology state for computing the ACC score. Dimensions other than
         axis 0 (forecast hour) and axis 1 (time) must match that of the forecast/valid arrays. If either of the first
-        two axes are included, they must be size 1.
+        two axes are included, they must be size 1 or (for time) match the time dimension.
     :return: ndarray: forecast error with forecast hour as the first dimension
     """
     assert method in ['mse', 'mae', 'rmse', 'acc', 'cos'], "'method' must be one of 'mse', 'mae', 'rmse', 'acc', 'cos'"
@@ -68,6 +68,9 @@ def forecast_error(forecast, valid, method='mse', axis=None, weighted=False, cli
                      np.linalg.norm((valid - climatology) * weights, axis=axis)))
     else:
         # valid provided as a continuous time series without a forecast hour dimension
+        if len(climatology.shape) >= len(valid.shape) and climatology.shape[0] > 1:
+            raise ValueError("'climatology' cannot have non-spatial dimensions != 1 if the verification data is not "
+                             "provided with a forecast hour dimension")
         n_val = valid.shape[0]
         me = []
         for f in range(n_f):
@@ -407,3 +410,36 @@ def verification_from_series(ds, all_ds=None, init_times=None, forecast_steps=1,
             method=None
         ).values
     return verification
+
+
+def daily_climatology(ds):
+    """
+    Generate a daily climatology from a Dataset or DataArray with a "time" dimension.
+
+    :param ds: xarray.Dataset or xarray.DataArray
+    :return: xarray.Dataset or xarray.DataArray with a "dayofyear" dimension
+    """
+    return ds.groupby('time.dayofyear').mean()
+
+
+def daily_climo_time_series(climatology, times, f_hour=None):
+    """
+    Generate a time series of daily climatology values from a climatology Dataset or DataArray and the specific
+    desired times.
+
+    :param climatology: xarray.Dataset or xarray.DataArray with a 'dayofyear' dimension
+    :param times: iter: Timestamps
+    :param f_hour: iter: timedelta64[h] or int
+    :return: xarray.Dataset or xarray.DataArray with a 'time' dimension corresponding to daily climatologies for those
+        times
+    """
+    if f_hour is not None:
+        result = []
+        for f in f_hour:
+            doy = [pd.Timestamp(t + np.array(f).astype('timedelta64[h]')).dayofyear for t in times]
+            result.append(climatology.sel(dayofyear=doy).rename({'dayofyear': 'time'}).assign_coords(time=times))
+        result = xr.concat(result, dim='f_hour').assign_coords(f_hour=f_hour)
+    else:
+        doy = [t.dayofyear for t in times]
+        result = climatology.sel(dayofyear=doy).rename({'dayofyear': 'time'}).assign_coords(time=times)
+    return result

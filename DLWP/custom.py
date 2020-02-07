@@ -25,6 +25,7 @@ except ImportError:
 
 K = tfk.backend
 
+
 # ==================================================================================================================== #
 # Keras utility classes
 # ==================================================================================================================== #
@@ -174,7 +175,7 @@ class SaveWeightsOnEpoch(Callback):
 
     def on_epoch_end(self, epoch, logs=None):
         if self.interval is not None and epoch % self.interval == 0:
-            self.model.save_weights('%s.%s' % (self.weights_file, epoch))
+            self.model.save_weights('%s.%s' % (self.weights_file, epoch), save_format='h5')
         else:
             try:
                 self.model.save_weights(self.weights_file)
