@@ -321,7 +321,8 @@ def add_metadata_to_forecast_cs(forecast, f_hour, meta_ds, f_hour_timedelta_type
     return forecast
 
 
-def verification_from_samples(ds, all_ds=None, init_times=None, forecast_steps=1, dt=6, f_hour_timedelta_type=True):
+def verification_from_samples(ds, all_ds=None, init_times=None, forecast_steps=1, dt=6, f_hour_timedelta_type=True,
+                              include_zero=False):
     """
     Generate a DataArray of forecast verification from a validation DataSet built using Preprocessor.data_to_samples().
 
@@ -333,6 +334,7 @@ def verification_from_samples(ds, all_ds=None, init_times=None, forecast_steps=1
     :param dt: int: forecast time step in hours
     :param f_hour_timedelta_type: bool: if True, converts f_hour dimension into a timedelta type. May not always be
         compatible with netCDF applications.
+    :param include_zero: bool: if True, include the 0 forecast hour (initialization)
     :return: xarray.DataArray: verification with forecast hour as the first dimension
     """
     forecast_steps = int(forecast_steps)
@@ -344,29 +346,32 @@ def verification_from_samples(ds, all_ds=None, init_times=None, forecast_steps=1
     if init_times is None:
         init_times = ds.sample.values
     dims = [d for d in ds.predictors.dims if d.lower() not in ['time_step', 'sample', 'time']]
-    f_hour = np.arange(dt, dt * forecast_steps + 1, dt)
+    f_hour = np.arange(0 if include_zero else dt, dt * forecast_steps + 1, dt)
     if f_hour_timedelta_type:
         f_hour = np.array(f_hour).astype('timedelta64[h]')
     verification = xr.DataArray(
-        np.full([forecast_steps, len(init_times)] + [ds.dims[d] for d in dims], np.nan, dtype=np.float32),
+        np.full([forecast_steps + int(include_zero), len(init_times)] + [ds.dims[d] for d in dims],
+                np.nan, dtype=np.float32),
         coords=[f_hour, init_times] + [ds[d] for d in dims],
         dims=['f_hour', 'time'] + dims,
         name='verification'
     )
     if all_ds is not None:
-        valid_da = all_ds.targets.isel(time_step=0)
+        valid_da = all_ds.predictors.isel(time_step=-1)
     else:
-        valid_da = ds.targets.isel(time_step=0)
+        valid_da = ds.predictors.isel(time_step=-1)
     for d, date in enumerate(init_times):
         verification[:, d] = valid_da.reindex(
-            sample=pd.date_range(date, date + np.timedelta64(timedelta(hours=dt * (forecast_steps - 1))),
+            sample=pd.date_range(date if include_zero else date + np.timedelta64(timedelta(hours=dt)),
+                                 date + np.timedelta64(timedelta(hours=dt * forecast_steps)),
                                  freq='%sH' % int(dt)),
             method=None
         ).values
     return verification
 
 
-def verification_from_series(ds, all_ds=None, init_times=None, forecast_steps=1, dt=6, f_hour_timedelta_type=True):
+def verification_from_series(ds, all_ds=None, init_times=None, forecast_steps=1, dt=6, f_hour_timedelta_type=True,
+                             include_zero=False):
     """
     Generate a DataArray of forecast verification from a validation DataSet built using Preprocessor.data_to_series().
 
@@ -378,6 +383,7 @@ def verification_from_series(ds, all_ds=None, init_times=None, forecast_steps=1,
     :param dt: int: forecast time step in hours
     :param f_hour_timedelta_type: bool: if True, converts f_hour dimension into a timedelta type. May not always be
         compatible with netCDF applications.
+    :param include_zero: bool: if True, include the 0 forecast hour (initialization)
     :return: xarray.DataArray: verification with forecast hour as the first dimension
     """
     forecast_steps = int(forecast_steps)
@@ -389,11 +395,12 @@ def verification_from_series(ds, all_ds=None, init_times=None, forecast_steps=1,
     if init_times is None:
         init_times = ds.sample.values
     dims = [d for d in ds.predictors.dims if d.lower() not in ['time_step', 'sample', 'time']]
-    f_hour = np.arange(dt, dt * forecast_steps + 1, dt)
+    f_hour = np.arange(0 if include_zero else dt, dt * forecast_steps + 1, dt)
     if f_hour_timedelta_type:
         f_hour = np.array(f_hour).astype('timedelta64[h]')
     verification = xr.DataArray(
-        np.full([forecast_steps, len(init_times)] + [ds.dims[d] for d in dims], np.nan, dtype=np.float32),
+        np.full([forecast_steps + int(include_zero), len(init_times)] + [ds.dims[d] for d in dims],
+                np.nan, dtype=np.float32),
         coords=[f_hour, init_times] + [ds[d] for d in dims],
         dims=['f_hour', 'time'] + dims,
         name='verification'
@@ -404,7 +411,7 @@ def verification_from_series(ds, all_ds=None, init_times=None, forecast_steps=1,
         valid_da = ds.predictors
     for d, date in enumerate(init_times):
         verification[:, d] = valid_da.reindex(
-            sample=pd.date_range(date + np.timedelta64(timedelta(hours=dt)),
+            sample=pd.date_range(date if include_zero else date + np.timedelta64(timedelta(hours=dt)),
                                  date + np.timedelta64(timedelta(hours=dt * forecast_steps)),
                                  freq='%sH' % int(dt)),
             method=None

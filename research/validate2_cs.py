@@ -53,13 +53,15 @@ map_files = ('/home/disk/brume/jweyn/Documents/DLWP/map_LL91x180_CS48.nc',
 # Names of model files, located in the root_directory, and labels for those models
 models = [
     'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2-relumax',
-    'dlwp_era5_6h-3_CS48_tau-sfc1000-tcwv-lsm-topo_UNET2-relumax',
-    'dlwp_era5_6h-3_CS48_tau-sfc1000-tcwv-lsm-topo_UNET2-48-relumax',
+    # 'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2-relumax-TC',
+    # 'dlwp_era5_6h-3_CS48_tau-sfc1000-tcwv-lsm-topo_UNET2-relumax',
+    # 'dlwp_era5_6h-3_CS48_tau-sfc1000-tcwv-lsm-topo_UNET2-48-relumax',
 ]
 model_labels = [
     '4-variable U-net',
-    '5-variable U-net (TCWV)',
-    '5-variable U-net-48 (TCWV)',
+    # '4-variable U-net TF-2.1',
+    # '5-variable U-net (TCWV)',
+    # '5-variable U-net-48 (TCWV)',
 ]
 
 # Optional list of selections to make from the predictor dataset for each model. This is useful if, for example,
@@ -68,8 +70,9 @@ model_labels = [
 # and outputs. Also specify the number of input/output time steps in each model.
 input_selection = output_selection = [
     {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0']},
-    {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0', 'tcwv/0']},
-    {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0', 'tcwv/0']},
+    # {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0']},
+    # {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0', 'tcwv/0']},
+    # {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0', 'tcwv/0']},
 ]
 
 # Optional added constant inputs
@@ -88,34 +91,34 @@ output_time_steps = [2] * len(models)
 # Subset the validation data. We will calculate an entire verification based on this part of the data. It is acceptable
 # to keep the entire validation data.
 # validation_set = 4 * (365 * 4 + 1)
-start_date = datetime(2012, 12, 31, 0)
-end_date = datetime(2017, 1, 31, 18)
+start_date = datetime(2016, 12, 31, 0)
+end_date = datetime(2018, 12, 31, 18)
 validation_set = pd.date_range(start_date, end_date, freq='6H')
 validation_set = np.array(validation_set, dtype='datetime64[ns]')
 
 # Select forecast initialization times. These are the actual forecast start times we will run the model and verification
 # for, and will also correspond to the comparison model forecast start times.
-dates_1 = pd.date_range('2013-01-01', '2013-12-31', freq='7D')
-dates_2 = pd.date_range('2013-01-04', '2013-12-31', freq='7D')
+dates_1 = pd.date_range('2017-01-01', '2017-12-31', freq='7D')
+dates_2 = pd.date_range('2017-01-04', '2017-12-31', freq='7D')
 dates_0 = dates_1.append(dates_2).sort_values()
 dates = dates_0.copy()
-for year in range(2014, 2017):
+for year in range(2018, 2019):
     dates = dates.append(pd.DatetimeIndex(pd.Series(dates_0).apply(lambda x: x.replace(year=year))))
-initialization_dates = dates
+initialization_dates = dates[:-1]
 
 # Number of forward integration weather forecast time steps
-num_forecast_hours = 672
+num_forecast_hours = 336
 dt = 6
 
 # Latitude bounds for MSE calculation
 lat_range = [-90., 90.]
 
 # Calculate statistics for a selected variable and level, or varlev if the predictor data was produced pairwise.
-# Provide as a dictionary to extract to kwargs. If None, then averages all variables. Cannot be None if using a
-# barotropic model for comparison (specify Z500).
+# Provide as a dictionary to extract to kwargs. If None, then averages all variables.
 selection = {
     'varlev': 'z/500'
 }
+var_label = '$Z_{500}$'
 
 # Scale the variables to original units
 scale_variables = True
@@ -133,14 +136,20 @@ added_scale_factor = 9.81
 # Do specific plots
 plot_directory = '/home/disk/brume/jweyn/Documents/DLWP/Plots'
 plot_history = False
-plot_zonal = True
+plot_zonal = False
 plot_mse = True
 plot_spread = False
 plot_mean = False
-method = 'acc'
-mse_title = r'Z500; 2013-16; global'  # '20-70$^{\circ}$N'
-mse_file_name = 'acc_era_6h_CS48_z500-tcwv.pdf'
-mse_pkl_file = 'acc_era_6h_CS48_z500-tcwv.pkl'
+method = 'rmse'
+mse_title = None
+mse_file_name = '%s_era_6h_CS48_z500_paper.pdf' % method
+mse_pkl_file = '%s_era_6h_CS48_z500_paper.pkl' % method
+
+# Add computed values from a pkl file
+import_files = [
+    '%s/%s_ifs_t42_z500.pkl' % (plot_directory, method),
+    '%s/%s_ifs_t63_z500.pkl' % (plot_directory, method),
+]
 
 
 #%% Pre-processing
@@ -207,14 +216,24 @@ else:  # we must have a list of datetimes
 verification_ds = verification_ds.sel(**selection)
 verification_ds.load()
 verification = verify.verification_from_series(verification_ds, init_times=initialization_dates,
-                                               forecast_steps=num_forecast_steps, dt=dt, f_hour_timedelta_type=False)
+                                               forecast_steps=num_forecast_steps, dt=dt, f_hour_timedelta_type=False,
+                                               include_zero=True)
 verification = verification.isel(lat=((verification.lat >= lat_min) & (verification.lat <= lat_max)))
 if scale_variables:
     verification = verification * sel_std + sel_mean
 
+# Get a DataArray for the daily mean verification if daily mean is requested
 if daily_mean:
+    # Add the mean of the previous day as f_hour 0
+    init = verify.verification_from_series(verification_ds,
+                                           init_times=[d - pd.Timedelta(hours=24) for d in initialization_dates],
+                                           forecast_steps=24 / dt, dt=dt).mean('f_hour')
+    if scale_variables:
+        init = init * sel_std + sel_mean
     verification['f_day'] = xr.DataArray(np.floor((verification.f_hour.values - 1) / 24.) + 1., dims=['f_hour'])
-    verif_daily = verification.groupby('f_day').mean('f_hour')
+    verif_daily = verification.isel(f_hour=slice(1, None)).groupby('f_day').mean('f_hour')
+    init = init.expand_dims('f_day', axis=0).assign_coords(time=verif_daily.time[:], f_day=[0])
+    verif_daily = xr.concat([init, verif_daily], dim='f_day')
 
 # Load the climatology data
 if climo_file is None:
@@ -248,7 +267,7 @@ for m, model in enumerate(models):
         file_var = '_' + remove_chars(selection['varlev'])
     except KeyError:
         file_var = ''
-    forecast_file = '%s/forecast_%s%s.nc' % (root_directory, remove_chars(model), file_var)
+    forecast_file = '%s/forecast_%s%s_test.nc' % (root_directory, remove_chars(model), file_var)
     if os.path.isfile(forecast_file):
         print('Forecast file %s already exists; using it. If issues arise, delete this file and try again.'
               % forecast_file)
@@ -355,6 +374,18 @@ for m, model in enumerate(models):
     # tf.compat.v1.keras.backend.clear_session()
 
 
+#%% Add pickled results
+
+for in_file in import_files:
+    with open(in_file, 'rb') as f:
+        data = pickle.load(f)
+
+    for label, values, fh in zip(data['model_labels'], data['mse'], data['f_hours']):
+        model_labels.append(label)
+        mse.append(values)
+        f_hours.append(fh)
+
+
 #%% Add an extra model
 
 if added_forecast_file is not None:
@@ -394,35 +425,20 @@ if added_forecast_file is not None:
 #%% Add persistence and climatology
 
 print('Calculating persistence forecasts...')
-if daily_mean:
-    init = verify.verification_from_series(verification_ds,
-                                           init_times=[d - pd.Timedelta(hours=24) for d in initialization_dates],
-                                           forecast_steps=24 / dt, dt=dt).mean('f_hour')
-    f_hours.append(verif_daily.f_day.values * 24)
-else:
-    init = verification_ds.predictors.sel(sample=verification.time).isel(
-        lat=((verification_ds.lat >= lat_min) & (verification_ds.lat <= lat_max)))
-    init.load()
-    f_hours.append(np.arange(dt, num_forecast_steps * dt + 1., dt))
-
-if scale_variables:
-    init = init * sel_std + sel_mean
-if 'time_step' in init.dims:
-    init = init.isel(time_step=-1)
+init = verif_daily.isel(f_day=0) if daily_mean else verification.isel(f_hour=0)
+f_hours.append(verif_daily.f_day.values * 24. if daily_mean else verification.f_hour.values)
 persist = xr.concat([init] * len(f_hours[-1]), dim='f_day' if daily_mean else 'f_hour').assign_coords(
     **{'f_day' if daily_mean else 'f_hour': verif_daily.f_day if daily_mean else verification.f_hour})
-if daily_mean:
-    persist = persist.assign_coords(time=verif_daily.time[:])
 mse.append(verify.forecast_error(persist, verif_daily if daily_mean else verification,
                                  method=method, weighted=True, climatology=acc_climo))
 model_labels.append('Persistence')
 
 print('Calculating climatology forecasts...')
-mse.append(verify.monthly_climo_error(init, init.time, n_fhour=num_forecast_steps, method=method,
+mse.append(verify.monthly_climo_error(init, init.time, n_fhour=num_forecast_steps + 1, method=method,
                                       climo_da=None if climo_file is None else climo_data, by_day_of_year=True,
                                       weighted=True))
 model_labels.append('Climatology')
-f_hours.append(np.arange(dt, num_forecast_steps * dt + 1., dt))
+f_hours.append(np.arange(0, num_forecast_steps * dt + 1., dt))
 
 
 #%% Plot the combined MSE as a function of forecast hour for all models
@@ -448,7 +464,7 @@ if plot_mse:
         plt.legend(loc='best', fontsize=8)
         plt.grid(True, color='lightgray', zorder=-100)
         plt.xlabel('forecast day')
-        plt.ylabel(method.upper())
+        plt.ylabel('%s %s' % (var_label, method.upper()))
         plt.title(mse_title)
         plt.savefig('%s/%s' % (plot_directory, mse_file_name), bbox_inches='tight')
         plt.show()
@@ -474,7 +490,7 @@ if plot_mse:
         plt.legend(loc='best', fontsize=8)
         plt.grid(True, color='lightgray', zorder=-100)
         plt.xlabel('forecast day')
-        plt.ylabel(method.upper())
+        plt.ylabel('%s %s' % (var_label, method.upper()))
         plt.title(mse_title)
         plt.savefig('%s/%s' % (plot_directory, mse_file_name), bbox_inches='tight')
         plt.show()

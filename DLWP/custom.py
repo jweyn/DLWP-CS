@@ -178,7 +178,7 @@ class SaveWeightsOnEpoch(Callback):
             self.model.save_weights('%s.%s' % (self.weights_file, epoch), save_format='h5')
         else:
             try:
-                self.model.save_weights(self.weights_file)
+                self.model.save_weights(self.weights_file, save_format='h5')
             except OSError:  # If the file is temporarily system locked for any reason, avoid crashing
                 pass
 

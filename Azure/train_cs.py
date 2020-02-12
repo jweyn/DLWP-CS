@@ -106,6 +106,9 @@ add_solar = True
 # Use multiple GPUs, if available
 n_gpu = 1
 
+# Optimize the optimizer for GPU tensor cores by using mixed precision
+use_mp_optimizer = True
+
 # Validation set to use. Either an integer (number of validation samples, taken from the end), or an iterable of
 # pandas datetime objects. The train set can be set to the first <integer> samples, an iterable of dates, or None to
 # simply use the remaining points. Match the type of validation_set.
@@ -423,7 +426,7 @@ if loss_by_step is None:
     loss_by_step = [1./integration_steps] * integration_steps
 
 # Build the DLWP model
-opt = tf.train.experimental.enable_mixed_precision_graph_rewrite(Adam())
+opt = tf.train.experimental.enable_mixed_precision_graph_rewrite(Adam()) if use_mp_optimizer else Adam()
 dlwp.build_model(model, loss=loss_function, loss_weights=loss_by_step, optimizer=opt, metrics=['mae'], gpus=n_gpu)
 print(dlwp.base_model.summary())
 
