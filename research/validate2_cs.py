@@ -19,7 +19,7 @@ matplotlib.use('agg')
 import matplotlib.pyplot as plt
 
 from DLWP.model import SeriesDataGenerator, TimeSeriesEstimator
-from DLWP.model import verify
+from DLWP import verify
 from DLWP.model.preprocessing import get_constants
 from DLWP.plot import history_plot, zonal_mean_plot
 from DLWP.util import load_model, train_test_split_ind, remove_chars, is_channels_last

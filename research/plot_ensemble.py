@@ -21,8 +21,7 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 
 from DLWP.model import SeriesDataGenerator, TimeSeriesEstimator, DLWPFunctional
-from DLWP.model import verify
-from DLWP.plot import history_plot, forecast_example_plot, zonal_mean_plot
+from DLWP import verify
 from DLWP.util import load_model, train_test_split_ind
 from DLWP.custom import latitude_weighted_loss
 

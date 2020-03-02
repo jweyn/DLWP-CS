@@ -15,8 +15,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 from cartopy.util import add_cyclic_point
-from DLWP.model import verify
-
+from DLWP import verify
 
 #%% Options
 

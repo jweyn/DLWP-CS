@@ -9,7 +9,7 @@ Plot forecasts from DLWP models, along with verification and the CFS and barotro
 """
 
 from DLWP.model import DataGenerator
-from DLWP.model import verify
+from DLWP import verify
 from DLWP.util import load_model
 from DLWP.data import CFSReforecast
 import tensorflow.keras.backend as K

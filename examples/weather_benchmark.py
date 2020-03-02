@@ -20,7 +20,8 @@ from datetime import datetime
 import tensorflow as tf
 import matplotlib.pyplot as plt
 
-from DLWP.model import DLWPNeuralNet, SeriesDataGenerator, verify
+from DLWP.model import DLWPNeuralNet, SeriesDataGenerator
+from DLWP import verify
 from DLWP.model.extensions import TimeSeriesEstimator
 from DLWP.util import save_model, load_model
 from DLWP.custom import EarlyStoppingMin

@@ -18,7 +18,7 @@ from datetime import datetime
 from DLWP.model import SeriesDataGenerator, TimeSeriesEstimator
 from DLWP.model.preprocessing import get_constants
 from DLWP.util import load_model, remove_chars, is_channels_last
-from DLWP.model import verify
+from DLWP import verify
 from DLWP.remap import CubeSphereRemap
 
 import tensorflow as tf
