@@ -14,14 +14,15 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 from datetime import datetime
-from DLWP.model import DLWPFunctional, ArrayDataGenerator
+from DLWP.model import DLWPFunctional, ArrayDataGenerator, tf_data_generator
 from DLWP.model.preprocessing import get_constants, prepare_data_array
 from DLWP.util import save_model
 from tensorflow.keras.callbacks import History, TensorBoard
 
 from tensorflow.keras.layers import Input, UpSampling3D, AveragePooling3D, concatenate, ReLU, Reshape, Concatenate, \
     Permute
-from DLWP.custom import CubeSpherePadding2D, CubeSphereConv2D, RNNResetStates, EarlyStoppingMin, SaveWeightsOnEpoch
+from DLWP.custom import CubeSpherePadding2D, CubeSphereConv2D, RNNResetStates, EarlyStoppingMin, SaveWeightsOnEpoch, \
+    GeneratorEpochEnd
 from tensorflow.keras.models import Model
 from tensorflow.keras.optimizers import Adam
 
@@ -52,7 +53,7 @@ constant_fields = [
 
 # Parameters for the CNN
 cnn_model_name = 'unet2'
-base_filter_number = 32
+base_filter_number = 48
 min_epochs = 100
 max_epochs = 1000
 patience = 50
@@ -66,7 +67,7 @@ independent_north_pole = False
 # keep dimensions correct. The number of output iterations to train on is given by integration_steps. The actual number
 # of forecast steps (units of model delta t) is io_time_steps * integration_steps. The parameter data_interval
 # governs what the effective delta t is; it is a multiplier for the temporal resolution of the data file.
-io_selection = {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0']}
+io_selection = {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0', 'tcwv/0']}
 io_time_steps = 2
 integration_steps = 2
 data_interval = 2
@@ -80,9 +81,8 @@ load_memory = 'minimal'
 # Use multiple GPUs, if available
 n_gpu = 1
 
-# Pre-load the validation set in memory. Uses quite a bit of memory, but may be required with TensorFlow 2.x which does
-# not play nicely with multiprocessing generators.
-load_validation_set = False
+# Optimize the optimizer for GPU tensor cores by using mixed precision
+use_mp_optimizer = True
 
 # Validation set to use. Either an integer (number of validation samples, taken from the end), or an iterable of
 # pandas datetime objects. The train set can be set to the first <integer> samples, an iterable of dates, or None to
@@ -94,10 +94,6 @@ train_set = list(pd.date_range(datetime(1979, 1, 1, 0), datetime(2012, 12, 31, 1
 #%% Open data
 
 data = xr.open_dataset(predictor_file)
-# Fix negative latitude for solar radiation input
-if reverse_lat:
-    data.lat.load()
-    data.lat[:] = -1. * data.lat.values
 
 has_constants = not(not constant_fields)
 constants = get_constants(constant_fields or None)
@@ -122,7 +118,11 @@ train_array, input_ind, output_ind, sol = prepare_data_array(train_data, input_s
 generator = ArrayDataGenerator(dlwp, train_array, rank=3, input_slice=input_ind, output_slice=output_ind,
                                input_time_steps=io_time_steps, output_time_steps=io_time_steps,
                                sequence=integration_steps, interval=data_interval, insolation_array=sol,
-                               batch_size=batch_size, shuffle=shuffle, constants=constants, channels_last=True)
+                               batch_size=batch_size, shuffle=shuffle, constants=constants, channels_last=True,
+                               drop_remainder=True)
+input_names = ['main_input'] + ['solar_%d' % i for i in range(1, integration_steps)] + \
+              (['constants'] if has_constants else [])
+tf_train_data = tf_data_generator(generator, batch_size=batch_size, input_names=input_names)
 if validation_data is not None:
     print('Loading validation data to memory...')
     val_array, input_ind, output_ind, sol = prepare_data_array(validation_data, input_sel=io_selection,
@@ -130,15 +130,10 @@ if validation_data is not None:
     val_generator = ArrayDataGenerator(dlwp, val_array, rank=3, input_slice=input_ind, output_slice=output_ind,
                                        input_time_steps=io_time_steps, output_time_steps=io_time_steps,
                                        sequence=integration_steps, interval=data_interval, insolation_array=sol,
-                                       batch_size=batch_size, shuffle=shuffle, constants=constants, channels_last=True)
-    if load_validation_set:
-        val = val_generator.generate([])
-        del val_array
-        del sol
+                                       batch_size=batch_size, shuffle=False, constants=constants, channels_last=True)
+    tf_val_data = tf_data_generator(val_generator, input_names=input_names)
 else:
-    val_generator = None
-    if load_validation_set:
-        val = None
+    tf_val_data = None
 
 total_time = time.time() - start_time
 print('Time to load data: %d m %0.2f s' % (np.floor(total_time / 60), total_time % 60))
@@ -189,7 +184,7 @@ conv_2d_6_3 = CubeSphereConv2D(base_filter_number * 2, 3, **conv_kwargs)
 conv_2d_7 = CubeSphereConv2D(base_filter_number, 3, **conv_kwargs)
 conv_2d_7_2 = CubeSphereConv2D(base_filter_number, 3, **conv_kwargs)
 conv_2d_7_3 = CubeSphereConv2D(base_filter_number, 3, **conv_kwargs)
-conv_2d_8 = CubeSphereConv2D(cso[-1], 1, **conv_kwargs)
+conv_2d_8 = CubeSphereConv2D(cso[-1], 1, name='output', **conv_kwargs)
 
 
 # Define the model functions.
@@ -390,7 +385,9 @@ if loss_by_step is None:
     loss_by_step = [1./integration_steps] * integration_steps
 
 # Build the DLWP model
-opt = tf.train.experimental.enable_mixed_precision_graph_rewrite(Adam())
+opt = Adam(learning_rate=1.e-5)
+if use_mp_optimizer:
+    opt = tf.train.experimental.enable_mixed_precision_graph_rewrite(opt)
 dlwp.build_model(model, loss=loss_function, loss_weights=loss_by_step, optimizer=opt, metrics=['mae'], gpus=n_gpu)
 print(dlwp.base_model.summary())
 
@@ -400,7 +397,6 @@ print(dlwp.base_model.summary())
 # Train and evaluate the model
 start_time = time.time()
 print('Begin training...')
-# run = Run.get_context()
 history = History()
 early = EarlyStoppingMin(monitor='val_loss' if validation_data is not None else 'loss', min_delta=0.,
                          min_epochs=min_epochs, max_epochs=max_epochs, patience=patience,
@@ -408,16 +404,18 @@ early = EarlyStoppingMin(monitor='val_loss' if validation_data is not None else 
 tensorboard = TensorBoard(log_dir=log_directory, update_freq='epoch')
 save = SaveWeightsOnEpoch(weights_file=model_file + '.keras.tmp', interval=25)
 
-try:
-    dlwp.model.load_weights('%s.keras.tmp' % model_file)
-    print('Loaded weights from existing model temporary file')
-except OSError:
-    pass
+if input_weights is not None:
+    dlwp.model.load_weights(input_weights)
+else:
+    try:
+        dlwp.model.load_weights('%s.keras.tmp' % model_file)
+        print('Loaded weights from existing model temporary file')
+    except:
+        pass
 
-dlwp.fit_generator(generator, epochs=max_epochs+1, verbose=1,
-                   validation_data=val if load_validation_set else val_generator,
-                   use_multiprocessing=True, workers=1,
-                   callbacks=[history, RNNResetStates(), early, save])
+dlwp.fit_generator(tf_train_data, epochs=max_epochs + 1,
+                   verbose=1, validation_data=tf_val_data,
+                   callbacks=[history, RNNResetStates(), early, save, GeneratorEpochEnd(generator)])
 end_time = time.time()
 
 # Save the model
@@ -428,9 +426,6 @@ if model_file is not None:
 # Evaluate the model
 print("\nTrain time -- %s seconds --" % (end_time - start_time))
 if validation_data is not None:
-    if load_validation_set:
-        score = dlwp.evaluate(*val, verbose=0)
-    else:
-        score = dlwp.evaluate(*val_generator.generate([]), verbose=0)
+    score = dlwp.evaluate(*val_generator.generate([]), verbose=0)
     print('Validation loss:', score[0])
     print('Validation mean absolute error:', score[1])

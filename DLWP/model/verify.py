@@ -34,7 +34,7 @@ def forecast_error(forecast, valid, method='mse', axis=None, weighted=False, cli
         according to the latitude
     :param climatology: ndarray or DataArray: mean climatology state for computing the ACC score. Dimensions other than
         axis 0 (forecast hour) and axis 1 (time) must match that of the forecast/valid arrays. If either of the first
-        two axes are included, they must be size 1.
+        two axes are included, they must be size 1 or (for time) match the time dimension.
     :return: ndarray: forecast error with forecast hour as the first dimension
     """
     assert method in ['mse', 'mae', 'rmse', 'acc', 'cos'], "'method' must be one of 'mse', 'mae', 'rmse', 'acc', 'cos'"
@@ -63,11 +63,18 @@ def forecast_error(forecast, valid, method='mse', axis=None, weighted=False, cli
                     / np.sqrt(np.nanmean((valid - climatology) ** 2. * weights, axis=axis) *
                               np.nanmean((forecast - climatology) ** 2. * weights, axis=axis)))
         elif method == 'cos':
-            return ((forecast - climatology).dot(valid * weights, dims=axis) /
+            # TODO: be consistent and return a np.ndarray. Need to figure out how to do the dot operation in numpy
+            if not isinstance(forecast, xr.DataArray):
+                raise TypeError("'cos' method requires xarray DataArrays for now")
+            dims = [valid.dims[axis]] if isinstance(axis, int) else [valid.dims[a] for a in axis]
+            return ((forecast - climatology).dot((valid - climatology) * weights, dims=dims) /
                     (np.linalg.norm((forecast - climatology) * weights, axis=axis) *
                      np.linalg.norm((valid - climatology) * weights, axis=axis)))
     else:
         # valid provided as a continuous time series without a forecast hour dimension
+        if len(climatology.shape) >= len(valid.shape) and climatology.shape[0] > 1:
+            raise ValueError("'climatology' cannot have non-spatial dimensions != 1 if the verification data is not "
+                             "provided with a forecast hour dimension")
         n_val = valid.shape[0]
         me = []
         for f in range(n_f):
@@ -275,7 +282,7 @@ def add_metadata_to_forecast(forecast, f_hour, meta_ds, f_hour_timedelta_type=Tr
     forecast = xr.DataArray(
         forecast,
         coords=[f_hour] + [meta_ds[d] for d in dims_order],
-        dims=['f_hour'] + dims_order,
+        dims=['f_hour'] + ['time' if d == 'sample' else d for d in dims_order],
         name='forecast'
     )
     return forecast
@@ -312,13 +319,14 @@ def add_metadata_to_forecast_cs(forecast, f_hour, meta_ds, f_hour_timedelta_type
     forecast = xr.DataArray(
         forecast,
         coords=[f_hour] + [meta_ds[d] for d in dims_order],
-        dims=['f_hour'] + dims_order,
+        dims=['f_hour'] + ['time' if d == 'sample' else d for d in dims_order],
         name='forecast'
     )
     return forecast
 
 
-def verification_from_samples(ds, all_ds=None, init_times=None, forecast_steps=1, dt=6, f_hour_timedelta_type=True):
+def verification_from_samples(ds, all_ds=None, init_times=None, forecast_steps=1, dt=6, f_hour_timedelta_type=True,
+                              include_zero=False):
     """
     Generate a DataArray of forecast verification from a validation DataSet built using Preprocessor.data_to_samples().
 
@@ -330,6 +338,7 @@ def verification_from_samples(ds, all_ds=None, init_times=None, forecast_steps=1
     :param dt: int: forecast time step in hours
     :param f_hour_timedelta_type: bool: if True, converts f_hour dimension into a timedelta type. May not always be
         compatible with netCDF applications.
+    :param include_zero: bool: if True, include the 0 forecast hour (initialization)
     :return: xarray.DataArray: verification with forecast hour as the first dimension
     """
     forecast_steps = int(forecast_steps)
@@ -341,29 +350,32 @@ def verification_from_samples(ds, all_ds=None, init_times=None, forecast_steps=1
     if init_times is None:
         init_times = ds.sample.values
     dims = [d for d in ds.predictors.dims if d.lower() not in ['time_step', 'sample', 'time']]
-    f_hour = np.arange(dt, dt * forecast_steps + 1, dt)
+    f_hour = np.arange(0 if include_zero else dt, dt * forecast_steps + 1, dt)
     if f_hour_timedelta_type:
         f_hour = np.array(f_hour).astype('timedelta64[h]')
     verification = xr.DataArray(
-        np.full([forecast_steps, len(init_times)] + [ds.dims[d] for d in dims], np.nan, dtype=np.float32),
+        np.full([forecast_steps + int(include_zero), len(init_times)] + [ds.dims[d] for d in dims],
+                np.nan, dtype=np.float32),
         coords=[f_hour, init_times] + [ds[d] for d in dims],
         dims=['f_hour', 'time'] + dims,
         name='verification'
     )
     if all_ds is not None:
-        valid_da = all_ds.targets.isel(time_step=0)
+        valid_da = all_ds.predictors.isel(time_step=-1)
     else:
-        valid_da = ds.targets.isel(time_step=0)
+        valid_da = ds.predictors.isel(time_step=-1)
     for d, date in enumerate(init_times):
         verification[:, d] = valid_da.reindex(
-            sample=pd.date_range(date, date + np.timedelta64(timedelta(hours=dt * (forecast_steps - 1))),
+            sample=pd.date_range(date if include_zero else date + np.timedelta64(timedelta(hours=dt)),
+                                 date + np.timedelta64(timedelta(hours=dt * forecast_steps)),
                                  freq='%sH' % int(dt)),
             method=None
         ).values
     return verification
 
 
-def verification_from_series(ds, all_ds=None, init_times=None, forecast_steps=1, dt=6, f_hour_timedelta_type=True):
+def verification_from_series(ds, all_ds=None, init_times=None, forecast_steps=1, dt=6, f_hour_timedelta_type=True,
+                             include_zero=False):
     """
     Generate a DataArray of forecast verification from a validation DataSet built using Preprocessor.data_to_series().
 
@@ -375,6 +387,7 @@ def verification_from_series(ds, all_ds=None, init_times=None, forecast_steps=1,
     :param dt: int: forecast time step in hours
     :param f_hour_timedelta_type: bool: if True, converts f_hour dimension into a timedelta type. May not always be
         compatible with netCDF applications.
+    :param include_zero: bool: if True, include the 0 forecast hour (initialization)
     :return: xarray.DataArray: verification with forecast hour as the first dimension
     """
     forecast_steps = int(forecast_steps)
@@ -386,11 +399,12 @@ def verification_from_series(ds, all_ds=None, init_times=None, forecast_steps=1,
     if init_times is None:
         init_times = ds.sample.values
     dims = [d for d in ds.predictors.dims if d.lower() not in ['time_step', 'sample', 'time']]
-    f_hour = np.arange(dt, dt * forecast_steps + 1, dt)
+    f_hour = np.arange(0 if include_zero else dt, dt * forecast_steps + 1, dt)
     if f_hour_timedelta_type:
         f_hour = np.array(f_hour).astype('timedelta64[h]')
     verification = xr.DataArray(
-        np.full([forecast_steps, len(init_times)] + [ds.dims[d] for d in dims], np.nan, dtype=np.float32),
+        np.full([forecast_steps + int(include_zero), len(init_times)] + [ds.dims[d] for d in dims],
+                np.nan, dtype=np.float32),
         coords=[f_hour, init_times] + [ds[d] for d in dims],
         dims=['f_hour', 'time'] + dims,
         name='verification'
@@ -401,9 +415,42 @@ def verification_from_series(ds, all_ds=None, init_times=None, forecast_steps=1,
         valid_da = ds.predictors
     for d, date in enumerate(init_times):
         verification[:, d] = valid_da.reindex(
-            sample=pd.date_range(date + np.timedelta64(timedelta(hours=dt)),
+            sample=pd.date_range(date if include_zero else date + np.timedelta64(timedelta(hours=dt)),
                                  date + np.timedelta64(timedelta(hours=dt * forecast_steps)),
                                  freq='%sH' % int(dt)),
             method=None
         ).values
     return verification
+
+
+def daily_climatology(ds):
+    """
+    Generate a daily climatology from a Dataset or DataArray with a "time" dimension.
+
+    :param ds: xarray.Dataset or xarray.DataArray
+    :return: xarray.Dataset or xarray.DataArray with a "dayofyear" dimension
+    """
+    return ds.groupby('time.dayofyear').mean()
+
+
+def daily_climo_time_series(climatology, times, f_hour=None):
+    """
+    Generate a time series of daily climatology values from a climatology Dataset or DataArray and the specific
+    desired times.
+
+    :param climatology: xarray.Dataset or xarray.DataArray with a 'dayofyear' dimension
+    :param times: iter: Timestamps
+    :param f_hour: iter: timedelta64[h] or int
+    :return: xarray.Dataset or xarray.DataArray with a 'time' dimension corresponding to daily climatologies for those
+        times
+    """
+    if f_hour is not None:
+        result = []
+        for f in f_hour:
+            doy = [pd.Timestamp(t + np.array(f).astype('timedelta64[h]')).dayofyear for t in times]
+            result.append(climatology.sel(dayofyear=doy).rename({'dayofyear': 'time'}).assign_coords(time=times))
+        result = xr.concat(result, dim='f_hour').assign_coords(f_hour=f_hour)
+    else:
+        doy = [t.dayofyear for t in times]
+        result = climatology.sel(dayofyear=doy).rename({'dayofyear': 'time'}).assign_coords(time=times)
+    return result

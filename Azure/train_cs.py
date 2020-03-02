@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 from datetime import datetime
-from DLWP.model import DLWPFunctional, ArrayDataGenerator
+from DLWP.model import DLWPFunctional, ArrayDataGenerator, tf_data_generator
 from DLWP.model.preprocessing import get_constants, prepare_data_array
 from DLWP.util import save_model
 from tensorflow.keras.callbacks import TensorBoard
@@ -25,18 +25,18 @@ from azureml.core import Run
 from tensorflow.keras.layers import Input, UpSampling3D, AveragePooling3D, concatenate, ReLU, Reshape, Concatenate, \
     Permute
 from DLWP.custom import CubeSpherePadding2D, CubeSphereConv2D, RNNResetStates, EarlyStoppingMin, \
-    RunHistory, SaveWeightsOnEpoch
+    RunHistory, SaveWeightsOnEpoch, GeneratorEpochEnd
 from tensorflow.keras.models import Model
 from tensorflow.keras.optimizers import Adam
 
 import tensorflow as tf
 # Disable warning logging
 tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
-# Set only GPU 0
-device = tf.config.list_physical_devices('GPU')[0]
+# # Set only GPU 0
+# device = tf.config.list_physical_devices('GPU')[0]
 # tf.config.set_visible_devices([device], 'GPU')
-# Allow memory growth
-tf.config.experimental.set_memory_growth(device, True)
+# # Allow memory growth
+# tf.config.experimental.set_memory_growth(device, True)
 
 
 #%% Parse user arguments
@@ -106,9 +106,8 @@ add_solar = True
 # Use multiple GPUs, if available
 n_gpu = 1
 
-# Force use of the keras model.fit() method. May run faster in some instances, but uses (input_time_steps +
-# output_time_steps) times more memory.
-use_keras_fit = False
+# Optimize the optimizer for GPU tensor cores by using mixed precision
+use_mp_optimizer = True
 
 # Validation set to use. Either an integer (number of validation samples, taken from the end), or an iterable of
 # pandas datetime objects. The train set can be set to the first <integer> samples, an iterable of dates, or None to
@@ -160,9 +159,11 @@ train_array, input_ind, output_ind, sol = prepare_data_array(train_data, input_s
 generator = ArrayDataGenerator(dlwp, train_array, rank=3, input_slice=input_ind, output_slice=output_ind,
                                input_time_steps=io_time_steps, output_time_steps=io_time_steps,
                                sequence=integration_steps, interval=data_interval, insolation_array=sol,
-                               batch_size=batch_size, shuffle=shuffle, constants=constants, channels_last=True)
-if use_keras_fit:
-    p_train, t_train = generator.generate([])
+                               batch_size=batch_size, shuffle=shuffle, constants=constants, channels_last=True,
+                               drop_remainder=True)
+input_names = ['main_input'] + ['solar_%d' % i for i in range(1, integration_steps)] + \
+              (['constants'] if has_constants else [])
+tf_train_data = tf_data_generator(generator, batch_size=batch_size, input_names=input_names)
 if validation_data is not None:
     print('Loading validation data to memory...')
     val_array, input_ind, output_ind, sol = prepare_data_array(validation_data, input_sel=io_selection,
@@ -170,13 +171,10 @@ if validation_data is not None:
     val_generator = ArrayDataGenerator(dlwp, val_array, rank=3, input_slice=input_ind, output_slice=output_ind,
                                        input_time_steps=io_time_steps, output_time_steps=io_time_steps,
                                        sequence=integration_steps, interval=data_interval, insolation_array=sol,
-                                       batch_size=batch_size, shuffle=shuffle, constants=constants, channels_last=True)
-    if use_keras_fit:
-        val = val_generator.generate([])
+                                       batch_size=batch_size, shuffle=False, constants=constants, channels_last=True)
+    tf_val_data = tf_data_generator(val_generator, input_names=input_names)
 else:
-    val_generator = None
-    if use_keras_fit:
-        val = None
+    tf_val_data = None
 
 total_time = time.time() - start_time
 print('Time to load data: %d m %0.2f s' % (np.floor(total_time / 60), total_time % 60))
@@ -227,7 +225,7 @@ conv_2d_6_3 = CubeSphereConv2D(base_filter_number * 2, 3, **conv_kwargs)
 conv_2d_7 = CubeSphereConv2D(base_filter_number, 3, **conv_kwargs)
 conv_2d_7_2 = CubeSphereConv2D(base_filter_number, 3, **conv_kwargs)
 conv_2d_7_3 = CubeSphereConv2D(base_filter_number, 3, **conv_kwargs)
-conv_2d_8 = CubeSphereConv2D(cso[-1], 1, **conv_kwargs)
+conv_2d_8 = CubeSphereConv2D(cso[-1], 1, name='output', **conv_kwargs)
 
 
 # Define the model functions.
@@ -428,7 +426,7 @@ if loss_by_step is None:
     loss_by_step = [1./integration_steps] * integration_steps
 
 # Build the DLWP model
-opt = tf.train.experimental.enable_mixed_precision_graph_rewrite(Adam())
+opt = tf.train.experimental.enable_mixed_precision_graph_rewrite(Adam()) if use_mp_optimizer else Adam()
 dlwp.build_model(model, loss=loss_function, loss_weights=loss_by_step, optimizer=opt, metrics=['mae'], gpus=n_gpu)
 print(dlwp.base_model.summary())
 
@@ -440,23 +438,25 @@ start_time = time.time()
 print('Begin training...')
 run = Run.get_context()
 history = RunHistory(run)
-early = EarlyStoppingMin(monitor='val_loss' if val_generator is not None else 'loss', min_delta=0.,
+early = EarlyStoppingMin(monitor='val_loss' if validation_data is not None else 'loss', min_delta=0.,
                          min_epochs=min_epochs, max_epochs=max_epochs, patience=patience,
                          restore_best_weights=True, verbose=1)
 tensorboard = TensorBoard(log_dir=log_directory, update_freq='epoch')
 save = SaveWeightsOnEpoch(weights_file=model_file + '.keras.tmp', interval=25)
 
-if use_keras_fit:
-    dlwp.fit(p_train, t_train, batch_size=batch_size, epochs=max_epochs + 1, verbose=2, validation_data=val,
-             callbacks=[history, RNNResetStates(), early, save])
-else:
-    dlwp.fit_generator(generator, epochs=max_epochs + 1, verbose=2, validation_data=val_generator,
-                       use_multiprocessing=True, workers=2, callbacks=[history, RNNResetStates(), early, save])
-total_time = time.time() - start_time
+try:
+    dlwp.model.load_weights('%s.keras.tmp' % model_file)
+    print('Loaded weights from existing model temporary file')
+except:
+    pass
+
+dlwp.fit_generator(tf_train_data, epochs=max_epochs + 1,
+                   verbose=2, validation_data=tf_val_data,
+                   callbacks=[history, RNNResetStates(), early, save, GeneratorEpochEnd(generator)])
+end_time = time.time()
 
 # Save the model
 if model_file is not None:
-    os.makedirs(os.path.sep.join(model_file.split(os.path.sep)[:-1]), exist_ok=True)
     save_model(dlwp, model_file, history=history)
     print('Wrote model %s' % model_file)
 

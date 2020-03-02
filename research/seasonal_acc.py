@@ -175,6 +175,14 @@ def cosine_acc(fcst, true):
                                                   np.linalg.norm(true, axis=(1, 2)))
 
 
+def weighted_cosine_acc(fcst, true):
+    result = verify.forecast_error(fcst, true, method='acc', weighted=True)
+    try:
+        return xr.DataArray(result, dims=['time'], coords={'time': verification.time})
+    except ValueError:
+        return xr.DataArray(result, dims=['time'], coords={'time': filter_time})
+
+
 acc_forecast = []
 
 for m, model in enumerate(models):
@@ -210,7 +218,7 @@ for m, model in enumerate(models):
     # Calculate the cosine ACC of the forecasts
     # Filter out where the forecasts blow up. This is only a temporary patch for poor models.
     filter_time = anomaly_forecast.time[xr.where(anomaly_forecast.max(('lat', 'lon')) < 5000., True, False)]
-    acc_forecast.append(cosine_acc(anomaly_forecast.sel(time=filter_time), anomaly_true.sel(time=filter_time)))
+    acc_forecast.append(weighted_cosine_acc(anomaly_forecast.sel(time=filter_time), anomaly_true.sel(time=filter_time)))
 
     # Clean up
     time_series = None
@@ -235,7 +243,7 @@ if added_forecast_file is not None:
     anomaly_forecast = anomaly_forecast - climo
 
     # Calculate the cosine ACC
-    acc_forecast.append(cosine_acc(anomaly_forecast, anomaly_true))
+    acc_forecast.append(weighted_cosine_acc(anomaly_forecast, anomaly_true))
     model_labels.append(added_forecast_label)
 
 
@@ -260,7 +268,7 @@ persist_climo = xr.concat(persist_climo, dim='time').assign_coords(time=initiali
 persist_climo = persist_climo * sel_std + sel_mean
 
 anomaly_forecast = persistence - persist_climo
-acc_forecast.append(cosine_acc(anomaly_forecast, anomaly_true))
+acc_forecast.append(weighted_cosine_acc(anomaly_forecast, anomaly_true))
 model_labels.append('Persistence')
 
 #%% Plot the results
@@ -275,7 +283,7 @@ bar_max = np.array([da.max('time').values for da in acc_forecast]) - bar_values
 plt.barh(range(len(model_labels)), bar_values, xerr=(bar_min, bar_max), tick_label=model_labels,
          color=['C%d' % m for m in range(len(model_labels))])
 plt.grid(True, color='lightgray', zorder=-100)
-plt.xlabel('cosine ACC')
+plt.xlabel('ACC')
 plt.xlim(-0.5, 1.0)
 plt.axvline(0., color='k', linewidth=1.5)
 plt.title(acc_title)

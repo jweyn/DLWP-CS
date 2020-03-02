@@ -12,7 +12,7 @@ import numpy as np
 from tensorflow.keras import models
 from tensorflow.keras.utils import multi_gpu_model
 
-from .generators import DataGenerator, SmartDataGenerator, SeriesDataGenerator
+from .generators import DataGenerator, SeriesDataGenerator, ArrayDataGenerator
 from .. import util
 
 
@@ -223,10 +223,10 @@ class DLWPNeuralNet(object):
         :param kwargs: passed to the model's fit_generator() method
         """
         # If generator is a DataGenerator below, check that we have called init_fit
-        if isinstance(generator, (DataGenerator, SmartDataGenerator, SeriesDataGenerator)):
+        if isinstance(generator, (DataGenerator, SeriesDataGenerator, ArrayDataGenerator)):
             if not self._is_init_fit:
                 raise AttributeError('DLWPNeuralNet has not been initialized for fitting with init_fit()')
-        self.model.fit_generator(generator, **kwargs)
+        self.model.fit(generator, **kwargs)
 
     def predict(self, predictors, **kwargs):
         """
@@ -403,7 +403,7 @@ class DLWPFunctional(object):
         :param generator: a generator for producing batches of data (see Keras docs), e.g., DataGenerator below
         :param kwargs: passed to the model's fit_generator() method
         """
-        self.model.fit_generator(generator, **kwargs)
+        self.model.fit(generator, **kwargs)
 
     def predict(self, predictors, **kwargs):
         """
