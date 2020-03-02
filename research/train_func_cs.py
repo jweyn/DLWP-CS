@@ -53,7 +53,7 @@ constant_fields = [
 
 # Parameters for the CNN
 cnn_model_name = 'unet2'
-base_filter_number = 32
+base_filter_number = 48
 min_epochs = 100
 max_epochs = 1000
 patience = 50
@@ -67,7 +67,7 @@ independent_north_pole = False
 # keep dimensions correct. The number of output iterations to train on is given by integration_steps. The actual number
 # of forecast steps (units of model delta t) is io_time_steps * integration_steps. The parameter data_interval
 # governs what the effective delta t is; it is a multiplier for the temporal resolution of the data file.
-io_selection = {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0']}
+io_selection = {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0', 'tcwv/0']}
 io_time_steps = 2
 integration_steps = 2
 data_interval = 2
@@ -94,10 +94,6 @@ train_set = list(pd.date_range(datetime(1979, 1, 1, 0), datetime(2012, 12, 31, 1
 #%% Open data
 
 data = xr.open_dataset(predictor_file)
-# Fix negative latitude for solar radiation input
-if reverse_lat:
-    data.lat.load()
-    data.lat[:] = -1. * data.lat.values
 
 has_constants = not(not constant_fields)
 constants = get_constants(constant_fields or None)
@@ -389,7 +385,9 @@ if loss_by_step is None:
     loss_by_step = [1./integration_steps] * integration_steps
 
 # Build the DLWP model
-opt = tf.train.experimental.enable_mixed_precision_graph_rewrite(Adam()) if use_mp_optimizer else Adam()
+opt = Adam(learning_rate=1.e-5)
+if use_mp_optimizer:
+    opt = tf.train.experimental.enable_mixed_precision_graph_rewrite(opt)
 dlwp.build_model(model, loss=loss_function, loss_weights=loss_by_step, optimizer=opt, metrics=['mae'], gpus=n_gpu)
 print(dlwp.base_model.summary())
 
@@ -406,11 +404,14 @@ early = EarlyStoppingMin(monitor='val_loss' if validation_data is not None else 
 tensorboard = TensorBoard(log_dir=log_directory, update_freq='epoch')
 save = SaveWeightsOnEpoch(weights_file=model_file + '.keras.tmp', interval=25)
 
-try:
-    dlwp.model.load_weights('%s.keras.tmp' % model_file)
-    print('Loaded weights from existing model temporary file')
-except:
-    pass
+if input_weights is not None:
+    dlwp.model.load_weights(input_weights)
+else:
+    try:
+        dlwp.model.load_weights('%s.keras.tmp' % model_file)
+        print('Loaded weights from existing model temporary file')
+    except:
+        pass
 
 dlwp.fit_generator(tf_train_data, epochs=max_epochs + 1,
                    verbose=1, validation_data=tf_val_data,

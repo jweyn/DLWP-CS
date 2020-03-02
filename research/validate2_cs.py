@@ -259,10 +259,7 @@ if daily_mean:
 #%% Iterate through the models and calculate their stats
 
 for m, model in enumerate(models):
-    print('Loading model %s...' % model)
-    # Load the model
-    dlwp, history = load_model('%s/%s' % (root_directory, model), True, gpus=1)
-
+    # Generate a file name for the forecast
     try:
         file_var = '_' + remove_chars(selection['varlev'])
     except KeyError:
@@ -273,6 +270,10 @@ for m, model in enumerate(models):
               % forecast_file)
 
     else:
+        # Load the model
+        print('Loading model %s...' % model)
+        dlwp, history = load_model('%s/%s' % (root_directory, model), True, gpus=1)
+
         # Create data generator
         constants = get_constants(constant_fields[m])
         sequence = dlwp._n_steps if hasattr(dlwp, '_n_steps') and dlwp._n_steps > 1 else None

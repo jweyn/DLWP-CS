@@ -63,7 +63,11 @@ def forecast_error(forecast, valid, method='mse', axis=None, weighted=False, cli
                     / np.sqrt(np.nanmean((valid - climatology) ** 2. * weights, axis=axis) *
                               np.nanmean((forecast - climatology) ** 2. * weights, axis=axis)))
         elif method == 'cos':
-            return ((forecast - climatology).dot(valid * weights, dims=axis) /
+            # TODO: be consistent and return a np.ndarray. Need to figure out how to do the dot operation in numpy
+            if not isinstance(forecast, xr.DataArray):
+                raise TypeError("'cos' method requires xarray DataArrays for now")
+            dims = [valid.dims[axis]] if isinstance(axis, int) else [valid.dims[a] for a in axis]
+            return ((forecast - climatology).dot((valid - climatology) * weights, dims=dims) /
                     (np.linalg.norm((forecast - climatology) * weights, axis=axis) *
                      np.linalg.norm((valid - climatology) * weights, axis=axis)))
     else:

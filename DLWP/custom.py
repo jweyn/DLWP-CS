@@ -34,7 +34,8 @@ class AdamLearningRateTracker(Callback):
     """
     Log the current learning rate used by and Adam optimizer.
     """
-    def on_epoch_end(self, epoch, logs=None, beta_1=0.9, beta_2=0.999,):
+
+    def on_epoch_end(self, epoch, logs=None, beta_1=0.9, beta_2=0.999, ):
         optimizer = self.model.optimizer
         it = K.cast(optimizer.iterations, K.floatx())
         lr = K.cast(optimizer.lr, K.floatx())
@@ -49,6 +50,7 @@ class SGDLearningRateTracker(Callback):
     """
     Log the current learning rate used by an SGD optimizer.
     """
+
     def on_epoch_end(self, epoch, logs=None):
         optimizer = self.model.optimizer
         it = K.cast(optimizer.iterations, K.floatx())
@@ -62,6 +64,7 @@ class BatchHistory(Callback):
     """
     Log training metrics for each batch of training data.
     """
+
     def on_train_begin(self, logs=None):
         self.history = []
         self.epoch = 0
@@ -112,6 +115,7 @@ class EarlyStoppingMin(EarlyStopping):
     Extends the keras.callbacks.EarlyStopping class to provide the option to force training for a minimum number of
     epochs or restore the best weights after the maximum epochs have been reached.
     """
+
     def __init__(self, min_epochs=0, max_epochs=None, **kwargs):
         """
         :param min_epochs: int: train the network for at least this number of epochs before early stopping
@@ -163,6 +167,7 @@ class SaveWeightsOnEpoch(Callback):
     Saves the model weights to a temporary file at the end of each epoch. This is useful for avoiding complete loss
     of a run that fails for any reason.
     """
+
     def __init__(self, weights_file, interval=None):
         """
         :param weights_file: str: file name to save weights
@@ -188,6 +193,7 @@ class GeneratorEpochEnd(Callback):
     Used in conjunction with a tensorflow.data.Dataset generator to manually execute the on_epoch_end() method of a
     DLWP.model.generators Generator instance after each epoch.
     """
+
     def __init__(self, generator):
         """
         :param generator: DLWP.model.generator instance
@@ -923,7 +929,7 @@ class CubeSphereConv2D(Layer):
                     padding=self.padding,
                     data_format=self.data_format,
                     dilation_rate=self.dilation_rate
-                 )
+                )
             )
             if self.use_bias:
                 outputs[f] = K.bias_add(
@@ -1167,17 +1173,17 @@ class CubeSpherePadding2D(ZeroPadding3D):
             # Face 4
             out.append(K.expand_dims(
                 K.concatenate([
-                    tf.transpose(K.reverse(out[3][:, :, 0, p:2*p, :], 2), tr),
+                    tf.transpose(K.reverse(out[3][:, :, 0, p:2 * p, :], 2), tr),
                     out1[:, :, 4],
-                    tf.transpose(out[1][:, :, 0, p:2*p, ::-1], tr)
+                    tf.transpose(out[1][:, :, 0, p:2 * p, ::-1], tr)
                 ], axis=3), 2
             ))
             # Face 5
             out.append(K.expand_dims(
                 K.concatenate([
-                    tf.transpose(out[3][:, :, 0, -2*p:-p, ::-1], tr),
+                    tf.transpose(out[3][:, :, 0, -2 * p:-p, ::-1], tr),
                     out1[:, :, 5],
-                    tf.transpose(K.reverse(out[1][:, :, 0, -2*p:-p, :], 2), tr)
+                    tf.transpose(K.reverse(out[1][:, :, 0, -2 * p:-p, :], 2), tr)
                 ], axis=3), 2
             ))
 
@@ -1669,6 +1675,55 @@ def anomaly_correlation_loss(mean=None, regularize_mean='mse', reverse=True):
 # Compatibility names
 # lat_loss = latitude_weighted_loss()
 # acc_loss = anomaly_correlation_loss()
+
+class AsymptoteReLU(Layer):
+    """
+    Rectified Linear Unit activation function.
+
+    Returns:
+      `f(x) = x / (beta * x + 1)` for `x >= 0`,
+      `f(x) = alpha * x` otherwise.
+
+      Input shape:
+        Arbitrary. Use the keyword argument `input_shape`
+        (tuple of integers, does not include the samples axis)
+        when using this layer as the first layer in a model.
+
+      Output shape:
+        Same shape as the input.
+
+      Arguments:
+        alpha: Float >= 0. Negative slope coefficient.
+        beta: Float >= 0. Positive asymptote coefficient.
+    """
+
+    def __init__(self, alpha=0., beta=1., **kwargs):
+        super(AsymptoteReLU, self).__init__(**kwargs)
+        if alpha < 0.:
+            raise ValueError('alpha of AsymptoteReLU layer '
+                             'cannot be negative value: ' + str(alpha))
+        if beta <= 0.:
+            raise ValueError('beta of AsymptoteReLU layer '
+                             'cannot be zero or negative value: ' + str(beta))
+
+        self.support_masking = True
+        self.alpha = K.cast_to_floatx(alpha)
+        self.beta = K.cast_to_floatx(beta)
+        self.one = K.cast_to_floatx(1.)
+
+    def call(self, inputs, **kwargs):
+        return K.relu(inputs / (K.abs(self.beta * inputs) + self.one), alpha=self.alpha)
+
+    def get_config(self):
+        config = {
+            'alpha': self.alpha,
+            'beta': self.beta
+        }
+        base_config = super(AsymptoteReLU, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
+
+    def compute_output_shape(self, input_shape):
+        return input_shape
 
 
 # ==================================================================================================================== #
