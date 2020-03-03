@@ -1011,7 +1011,7 @@ class ArrayDataGenerator(Sequence):
         return X, y
 
 
-def tf_data_generator(generator, batch_size=None, input_names=None):
+def tf_data_generator(generator, batch_size=None, input_names=None, output_names=None):
     """
     Wraps a DLWP.model Generator class into a generator function that can be used in a TensorFlow.Data.Dataset object.
 
@@ -1019,6 +1019,7 @@ def tf_data_generator(generator, batch_size=None, input_names=None):
     :param batch_size: int or None: if int, use a fixed batch size. Will cause an error if the last batch of training
         data does not have the same number of samples.
     :param input_names: list of str: optional list of names for the inputs, to match the model Input layers
+    :param output_names: list of str: optional list of names for the outputs, to match the model's output layers
     :return: tensorflow.data.Dataset
     """
     # Determine structure of output data
@@ -1028,8 +1029,15 @@ def tf_data_generator(generator, batch_size=None, input_names=None):
     if p_is_list:
         if input_names is None:
             input_names = ['input_%d' % (i + 1) for i in range(len(p))]
+        if len(input_names) != len(p):
+            raise ValueError("mismatched length of input names relative to generated data; got %d but expected %d" %
+                             (len(input_names), len(p)))
     if t_is_list:
-        output_names = ['output'] + ['output_%d' % i for i in range(1, len(t))]
+        if output_names is None:
+            output_names = ['output'] + ['output_%d' % i for i in range(1, len(t))]
+        if len(output_names) != len(t):
+            raise ValueError("mismatched length of input names relative to generated data; got %d but expected %d" %
+                             (len(output_names), len(t)))
 
     # Go through I/O options: define the yielding function and the data types & shape
     if not p_is_list and not t_is_list:
