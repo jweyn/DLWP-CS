@@ -43,7 +43,7 @@ root_directory = '/home/gold/jweyn/Data'
 predictor_file = os.path.join(root_directory, 'era5_2deg_3h_CS2_1979-2018_z-tau-t2_500-1000_tcwv_psi850.nc')
 model_file = os.path.join(root_directory, 'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2-relumax-TC')
 log_directory = os.path.join(root_directory, 'logs', 'era5_6h-3_CS48_tau-sfc1000-lsm_UNET2-relumax-TC')
-reverse_lat = False
+input_weights = None
 
 # Optional paths to files containing constant fields to add to the inputs
 constant_fields = [
