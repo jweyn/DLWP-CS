@@ -8,7 +8,8 @@
 Plot a sequence of forecasts from a DLWP model.
 """
 
-from DLWP.model import SeriesDataGenerator, verify, TimeSeriesEstimator, DLWPFunctional
+from DLWP.model import SeriesDataGenerator, TimeSeriesEstimator, DLWPFunctional
+from DLWP import verify
 from DLWP.util import load_model
 from DLWP.plot.util import blue_red_colormap
 import os

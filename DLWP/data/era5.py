@@ -126,7 +126,7 @@ class ERA5Reanalysis(object):
             self._root_directory = root_directory
         self._file_id = file_id
         self._delete_temp = False
-        self.level_coord = [1, 2, 3, 5, 7, 10, 20, 30, 50, 70, 100, 125, 150, 175, 200, 225, 250, 300, 350, 400, 450,
+        self.level_coord = [0, 1, 2, 3, 5, 7, 10, 20, 30, 50, 70, 100, 125, 150, 175, 200, 225, 250, 300, 350, 400, 450,
                             500, 550, 600, 650, 700, 750] + list(range(775, 1001, 25))
         self.inverse_lat = True
         # Data

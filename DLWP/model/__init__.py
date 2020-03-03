@@ -11,8 +11,7 @@ Implementation of deep learning model frameworks for DLWP.
 from .models import DLWPNeuralNet, DLWPFunctional
 from .generators import DataGenerator, SeriesDataGenerator, ArrayDataGenerator, tf_data_generator
 from .preprocessing import Preprocessor
-from .extensions import TimeSeriesEstimator
-from . import verify
+from .extensions import TimeSeriesEstimator, SeriesDataGeneratorWithInference, ArrayDataGeneratorWithInference
 
 from .models_torch import DLWPTorchNN
 

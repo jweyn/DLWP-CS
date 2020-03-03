@@ -17,7 +17,7 @@ import matplotlib
 matplotlib.use('agg')
 import matplotlib.pyplot as plt
 
-from DLWP.model import verify
+from DLWP import verify
 from DLWP.util import remove_chars
 
 

@@ -468,12 +468,110 @@ class TimeSeriesEstimator(object):
         if self._uses_varlev:
             return result_da
         else:
-            # TODO: support for rank != 2
             var, lev = self._output_sel['variable'], self._output_sel['level']
             vl = pd.MultiIndex.from_product((var, lev), names=('variable', 'level'))
             result_da = result_da.assign_coords(varlev=vl).unstack('varlev')
+            spatial_dims = [d for d in result_da.dims if d not in ['f_hour', 'time', 'variable', 'level']]
             if self.channels_last:
+                transpose_dims = ('f_hour', 'time') + tuple(spatial_dims) + ('variable', 'level')
                 result_da = result_da.transpose('f_hour', 'time', 'lat', 'lon', 'variable', 'level')
             else:
-                result_da = result_da.transpose('f_hour', 'time', 'variable', 'level', 'lat', 'lon')
+                transpose_dims = ('f_hour', 'time') + ('variable', 'level') + tuple(spatial_dims)
+            result_da = result_da.transpose(*transpose_dims)
             return result_da
+
+
+class SeriesDataGeneratorWithInference(SeriesDataGenerator):
+    """
+    An extension of the SeriesDataGenerator that couples a second model for inference of part of the sequence target
+    data. For example, with a model that predicts a sequence, a fixed model with fixed weights can be used to predict
+    the first step of a sequence while a new model is trained on the existing model first step and then real data for
+    the following steps.
+    """
+
+    def __init__(self, inference_model, inference_steps, *args, **kwargs):
+        """
+        Initialize an SeriesDataGenerator with an inference model. The arguments and kwargs must be those passed to the
+        ArrayDataGenerator. The parameter inference_steps governs which parts of the target sequence are replaced with
+        the inference model prediction. Numbers in inference_steps should be integers starting with 0 that correspond
+        to which steps in the target data should be replaced my the inference model prediction.
+
+        :param inference_model: DLWP model
+        :param inference_steps: iterable: steps in sequence to replace with inference
+        :param args: passed to SeriesDataGenerator()
+        :param kwargs: passed to SeriesDataGenerator()
+        """
+        if not isinstance(inference_model, (DLWPNeuralNet, DLWPFunctional, DLWPTorchNN)):
+            raise TypeError("inference model should be a DLWP model")
+
+        self.inference_model = inference_model
+        super(SeriesDataGeneratorWithInference, self).__init__(*args, **kwargs)
+
+        if self._sequence is None:
+            raise ValueError("'SeriesDataGeneratorWithInference' is only usable if the generator produces a "
+                             "sequence of targets")
+        if np.any(np.array(inference_steps)) < 0 or np.any(np.array(inference_steps)) >= self._sequence:
+            raise ValueError("got steps parameter (%s) outside of range 0 to %s" % (inference_steps, self._sequence))
+        self.inference_steps = inference_steps
+
+    def generate(self, samples, scale_and_impute=True):
+        # Generate data normally
+        p, t = super(SeriesDataGeneratorWithInference, self).generate(samples, scale_and_impute)
+
+        # Make a prediction with the inference model
+        predicted = self.inference_model.predict(p)
+
+        # Insert inference prediction
+        for s in self.steps:
+            t[s] = predicted[s][:]
+
+        # Return modified sample
+        return p, t
+
+
+class ArrayDataGeneratorWithInference(ArrayDataGenerator):
+    """
+    An extension of the ArrayDataGenerator that couples a second model for inference of part of the sequence target
+    data. For example, with a model that predicts a sequence, a fixed model with fixed weights can be used to predict
+    the first step of a sequence while a new model is trained on the existing model first step and then real data for
+    the following steps.
+    """
+
+    def __init__(self, inference_model, inference_steps, *args, **kwargs):
+        """
+        Initialize an ArrayDataGenerator with an inference model. The arguments and kwargs must be those passed to the
+        ArrayDataGenerator. The parameter inference_steps governs which parts of the target sequence are replaced with
+        the inference model prediction. Numbers in inference_steps should be integers starting with 0 that correspond
+        to which steps in the target data should be replaced my the inference model prediction.
+
+        :param inference_model: DLWP model
+        :param inference_steps: iterable: steps in sequence to replace with inference
+        :param args: passed to ArrayDataGenerator()
+        :param kwargs: passed to ArrayDataGenerator()
+        """
+        if not isinstance(inference_model, (DLWPNeuralNet, DLWPFunctional, DLWPTorchNN)):
+            raise TypeError("inference model should be a DLWP model")
+
+        self.inference_model = inference_model
+        super(ArrayDataGeneratorWithInference, self).__init__(*args, **kwargs)
+
+        if self._sequence is None:
+            raise ValueError("'ArrayDataGeneratorWithInference' is only usable if the generator produces a "
+                             "sequence of targets")
+        if np.any(np.array(inference_steps)) < 0 or np.any(np.array(inference_steps)) >= self._sequence:
+            raise ValueError("got steps parameter (%s) outside of range 0 to %s" % (inference_steps, self._sequence))
+        self.inference_steps = inference_steps
+
+    def generate(self, samples):
+        # Generate data normally
+        p, t = super(ArrayDataGeneratorWithInference, self).generate(samples)
+
+        # Make a prediction with the inference model
+        predicted = self.inference_model.predict(p)
+
+        # Insert inference prediction
+        for s in self.inference_steps:
+            t[s] = predicted[s][:]
+
+        # Return modified sample
+        return p, t

@@ -19,7 +19,7 @@ matplotlib.use('agg')
 import matplotlib.pyplot as plt
 
 from DLWP.model import SeriesDataGenerator, TimeSeriesEstimator
-from DLWP.model import verify
+from DLWP import verify
 from DLWP.model.preprocessing import get_constants
 from DLWP.plot import history_plot, zonal_mean_plot
 from DLWP.util import load_model, train_test_split_ind, remove_chars, is_channels_last
@@ -53,15 +53,15 @@ map_files = ('/home/disk/brume/jweyn/Documents/DLWP/map_LL91x180_CS48.nc',
 # Names of model files, located in the root_directory, and labels for those models
 models = [
     'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2-relumax',
-    # 'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2-relumax-TC',
-    # 'dlwp_era5_6h-3_CS48_tau-sfc1000-tcwv-lsm-topo_UNET2-relumax',
+    # 'dlwp_era5_6h-3_CS48_tau-sfc1000-lsm-topo_UNET2-relumax-TC-weight-2080',
     # 'dlwp_era5_6h-3_CS48_tau-sfc1000-tcwv-lsm-topo_UNET2-48-relumax',
+    # 'dlwp-cs-s2s_4var-tcwv_UNET2-48-2080',
 ]
 model_labels = [
-    '4-variable U-net',
-    # '4-variable U-net TF-2.1',
+    '4-variable DLWP U-net',
+    # '4-variable U-net 20/80 weighted',
     # '5-variable U-net (TCWV)',
-    # '5-variable U-net-48 (TCWV)',
+    # '5-variable U-net 20/80 weighted (TCWV)',
 ]
 
 # Optional list of selections to make from the predictor dataset for each model. This is useful if, for example,
@@ -98,11 +98,11 @@ validation_set = np.array(validation_set, dtype='datetime64[ns]')
 
 # Select forecast initialization times. These are the actual forecast start times we will run the model and verification
 # for, and will also correspond to the comparison model forecast start times.
-dates_1 = pd.date_range('2017-01-01', '2017-12-31', freq='7D')
-dates_2 = pd.date_range('2017-01-04', '2017-12-31', freq='7D')
+dates_1 = pd.date_range('2013-01-01', '2013-12-31', freq='7D')
+dates_2 = pd.date_range('2013-01-04', '2013-12-31', freq='7D')
 dates_0 = dates_1.append(dates_2).sort_values()
 dates = dates_0.copy()
-for year in range(2018, 2019):
+for year in range(2014, 2018):
     dates = dates.append(pd.DatetimeIndex(pd.Series(dates_0).apply(lambda x: x.replace(year=year))))
 initialization_dates = dates[:-1]
 
@@ -147,8 +147,8 @@ mse_pkl_file = '%s_era_6h_CS48_z500_paper.pkl' % method
 
 # Add computed values from a pkl file
 import_files = [
-    '%s/%s_ifs_t42_z500.pkl' % (plot_directory, method),
-    '%s/%s_ifs_t63_z500.pkl' % (plot_directory, method),
+    '%s/ifs_t42_z500_%s.pkl' % (plot_directory, method),
+    '%s/ifs_t63_z500_%s.pkl' % (plot_directory, method),
 ]
 
 
@@ -264,7 +264,7 @@ for m, model in enumerate(models):
         file_var = '_' + remove_chars(selection['varlev'])
     except KeyError:
         file_var = ''
-    forecast_file = '%s/forecast_%s%s_test.nc' % (root_directory, remove_chars(model), file_var)
+    forecast_file = '%s/forecast_%s%s.nc' % (root_directory, remove_chars(model), file_var)
     if os.path.isfile(forecast_file):
         print('Forecast file %s already exists; using it. If issues arise, delete this file and try again.'
               % forecast_file)
