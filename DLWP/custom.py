@@ -161,6 +161,9 @@ class EarlyStoppingMin(EarlyStopping):
                           'the best epoch')
                 self.model.set_weights(self.best_weights)
 
+        if self.verbose > 1:
+            print('EarlyStoppingMin: %d epochs since last minimum' % self.wait)
+
 
 class SaveWeightsOnEpoch(Callback):
     """

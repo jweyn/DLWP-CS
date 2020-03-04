@@ -385,7 +385,7 @@ if loss_by_step is None:
     loss_by_step = [1./integration_steps] * integration_steps
 
 # Build the DLWP model
-opt = Adam(learning_rate=1.e-5)
+opt = Adam()
 if use_mp_optimizer:
     opt = tf.train.experimental.enable_mixed_precision_graph_rewrite(opt)
 dlwp.build_model(model, loss=loss_function, loss_weights=loss_by_step, optimizer=opt, metrics=['mae'], gpus=n_gpu)
@@ -400,7 +400,7 @@ print('Begin training...')
 history = History()
 early = EarlyStoppingMin(monitor='val_loss' if validation_data is not None else 'loss', min_delta=0.,
                          min_epochs=min_epochs, max_epochs=max_epochs, patience=patience,
-                         restore_best_weights=True, verbose=1)
+                         restore_best_weights=True, verbose=2)
 tensorboard = TensorBoard(log_dir=log_directory, update_freq='epoch')
 save = SaveWeightsOnEpoch(weights_file=model_file + '.keras.tmp', interval=25)
 
