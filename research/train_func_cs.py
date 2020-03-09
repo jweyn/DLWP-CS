@@ -379,12 +379,8 @@ else:
         inputs = inputs + [constant_input]
 model = Model(inputs=inputs, outputs=complete_model(inputs))
 
-# No weighted loss available for cube sphere at the moment, but we can weight each integration sequence
-loss_function = 'mse'
-if loss_by_step is None:
-    loss_by_step = [1./integration_steps] * integration_steps
-
 # Build the DLWP model
+loss_function = 'mse'
 opt = Adam()
 if use_mp_optimizer:
     opt = tf.train.experimental.enable_mixed_precision_graph_rewrite(opt)
@@ -401,7 +397,7 @@ history = History()
 early = EarlyStoppingMin(monitor='val_loss' if validation_data is not None else 'loss', min_delta=0.,
                          min_epochs=min_epochs, max_epochs=max_epochs, patience=patience,
                          restore_best_weights=True, verbose=2)
-tensorboard = TensorBoard(log_dir=log_directory, update_freq='epoch')
+tensorboard = TensorBoard(log_dir=log_directory, update_freq='epoch', profile_batch=0)
 save = SaveWeightsOnEpoch(weights_file=model_file + '.keras.tmp', interval=25)
 
 if input_weights is not None:
@@ -415,7 +411,7 @@ else:
 
 dlwp.fit_generator(tf_train_data, epochs=max_epochs + 1,
                    verbose=1, validation_data=tf_val_data,
-                   callbacks=[history, RNNResetStates(), early, save, GeneratorEpochEnd(generator)])
+                   callbacks=[history, RNNResetStates(), early, save, tensorboard, GeneratorEpochEnd(generator)])
 end_time = time.time()
 
 # Save the model

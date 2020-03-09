@@ -37,6 +37,11 @@ tf.config.set_visible_devices(devices, 'GPU')
 tf.config.experimental.set_memory_growth(devices[0], True)
 tf.config.experimental.set_memory_growth(devices[1], True)
 
+# Random seed
+random_seed = 1
+np.random.seed(random_seed)
+tf.random.set_seed(random_seed)
+
 
 #%% Parameters
 
@@ -55,8 +60,8 @@ constant_fields = [
 
 # Parameters for the CNN
 min_epochs = 0
-max_epochs = 200
-patience = 50
+max_epochs = 100
+patience = 25
 batch_size = 64
 loss_by_step = None
 shuffle = True
@@ -161,7 +166,7 @@ if loss_by_step is None:
     loss_by_step = [1./integration_steps] * integration_steps
 
 # Build the DLWP model
-opt = Adam(learning_rate=1.e-4)
+opt = Adam(learning_rate=1.e-3)
 if use_mp_optimizer:
     opt = tf.train.experimental.enable_mixed_precision_graph_rewrite(opt)
 dlwp.build_model(dlwp.model, loss=loss_function, loss_weights=loss_by_step, optimizer=opt, metrics=['mae'], gpus=n_gpu)
@@ -176,13 +181,13 @@ print('Begin training...')
 history = History()
 early = EarlyStoppingMin(monitor='val_loss' if validation_data is not None else 'loss', min_delta=0.,
                          min_epochs=min_epochs, max_epochs=max_epochs, patience=patience,
-                         restore_best_weights=True, verbose=1)
-tensorboard = TensorBoard(log_dir=log_directory, update_freq='epoch')
+                         restore_best_weights=True, verbose=2)
+tensorboard = TensorBoard(log_dir=log_directory, update_freq='epoch', profile_batch=0)
 save = SaveWeightsOnEpoch(weights_file=model_file + '.keras.tmp', interval=25)
 
 dlwp.fit_generator(tf_train_data, epochs=max_epochs + 1,
                    verbose=1, validation_data=tf_val_data,
-                   callbacks=[history, RNNResetStates(), early, save, GeneratorEpochEnd(generator)])
+                   callbacks=[history, RNNResetStates(), early, save, tensorboard, GeneratorEpochEnd(generator)])
 end_time = time.time()
 
 # Save the model

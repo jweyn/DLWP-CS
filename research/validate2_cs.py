@@ -333,6 +333,9 @@ for m, model in enumerate(models):
 
     # Filter out where the forecasts blow up. This is only a temporary patch for poor models.
     filter_time = time_series.time[xr.where(time_series.max(('f_hour', 'lat', 'lon')) < 10., True, False)]
+    count_unstable = len(time_series.time) - len(filter_time)
+    if count_unstable > 0:
+        print('Warning: found %d forecasts which exceeded stable parameters' % count_unstable)
     time_series = time_series.sel(time=filter_time)
     time_intersection = np.intersect1d(filter_time, verification.time.values, assume_unique=True)
 
