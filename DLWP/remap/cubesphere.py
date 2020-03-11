@@ -75,7 +75,7 @@ class CubeSphereRemap(_BaseRemap):
             self._inverse_map_exists = True
 
     def generate_offline_maps(self, lat, lon, res, map_name=None, inverse_map_name=None, inverse_lat=False,
-                              remove_meshes=True):
+                              remove_meshes=True, in_np=1):
         """
         Generate offline maps for cubed sphere remapping.
 
@@ -86,11 +86,13 @@ class CubeSphereRemap(_BaseRemap):
         :param inverse_map_name: str: file name of the inverse map
         :param inverse_lat: if True, then the latitudes in the data file are monotonically decreasing
         :param remove_meshes: if True, remove the temporary meshes generated while making the offline maps
+        :param in_np: int: order of transformation. Should be int in range 1 to 4.
         :return:
         """
         assert int(lat) > 0
         assert int(lon) > 0
         assert int(res) > 0
+        assert 1 <= int(in_np) <= 4
         self._lat = lat
         self._lon = lon
         self._res = res
@@ -146,7 +148,7 @@ class CubeSphereRemap(_BaseRemap):
         try:
             cmd = [os.path.join(self.path_to_remapper, 'GenerateOfflineMap'),
                    '--in_mesh', 'outLL.g', '--out_mesh', 'outCS.g', '--ov_mesh', 'ov_LL_CS.g',
-                   '--in_np', '1', '--in_type', 'FV', '--out_type', 'FV', '--out_map', self.map]
+                   '--in_np', str(in_np), '--in_type', 'FV', '--out_type', 'FV', '--out_map', self.map]
             if self.to_netcdf4:
                 cmd = cmd + ['--out_format', 'Netcdf4']
             if self.verbose:
@@ -174,7 +176,7 @@ class CubeSphereRemap(_BaseRemap):
         try:
             cmd = [os.path.join(self.path_to_remapper, 'GenerateOfflineMap'),
                    '--in_mesh', 'outCS.g', '--out_mesh', 'outLL.g', '--ov_mesh', 'ov_CS_LL.g',
-                   '--in_np', '1', '--in_type', 'FV', '--out_type', 'FV', '--out_map', self.inverse_map]
+                   '--in_np', str(in_np), '--in_type', 'FV', '--out_type', 'FV', '--out_map', self.inverse_map]
             if self.to_netcdf4:
                 cmd = cmd + ['--out_format', 'Netcdf4']
             if self.verbose:
@@ -191,7 +193,136 @@ class CubeSphereRemap(_BaseRemap):
 
         self._inverse_map_exists = True
         if self.verbose:
-            print('CubeSphereRemap: succesfully generated offline maps (%s, %s)' % (self.map, self.inverse_map))
+            print('CubeSphereRemap: successfully generated offline maps (%s, %s)' % (self.map, self.inverse_map))
+
+    def generate_offline_maps_from_file(self, in_file, res, map_name=None, inverse_map_name=None,
+                                        remove_meshes=True, in_np=1):
+        """
+        Generate offline maps for cubed sphere remapping, using a netCDF file name to generate the lat-lon grid.
+        Requires most recent version of TempestRemap.
+
+        :param in_file: str: name of input netCDF file for latitude/longitude coordinates
+        :param res: int: number of points on a side of each cube face
+        :param map_name: str: file name of the forward map
+        :param inverse_map_name: str: file name of the inverse map
+        :param remove_meshes: if True, remove the temporary meshes generated while making the offline maps
+        :param in_np: int: order of transformation. Should be int in range 1 to 4.
+        :return:
+        """
+        assert int(res) > 0
+        assert 1 <= int(in_np) <= 4
+        self._res = res
+
+        ds = xr.open_dataset(in_file)
+        for file_lon in ['longitude', 'long', 'lon', None]:
+            if file_lon in ds.dims:
+                break
+        for file_lat in ['latitude', 'lat', None]:
+            if file_lat in ds.dims:
+                break
+        if file_lon is None or file_lat is None:
+            raise ValueError("cannot find standard names for latitude and longitude coordinates. Found %s" %
+                             list(ds.dims.keys()))
+        self._lat = ds.dims[file_lat]
+        self._lon = ds.dims[file_lon]
+        ds.close()
+
+        if map_name is None:
+            self.map = 'map_LL%dx%d_CS%d.nc' % (self._lat, self._lon, self._res)
+        else:
+            self.map = map_name
+        if inverse_map_name is None:
+            self.inverse_map = 'map_CS%d_LL%dx%d.nc' % (self._res, self._lat, self._lon)
+        else:
+            self.inverse_map = None
+
+        if self.verbose:
+            print('CubeSphereRemap: generating offline forward map...')
+        try:
+            cmd = [os.path.join(self.path_to_remapper, 'GenerateRLLMesh'),
+                   '--in_file', in_file, '--in_file_lat', file_lat, '--in_file_lon', file_lon, '--file', 'outLL.g']
+            if self.to_netcdf4:
+                cmd = cmd + ['--out_format', 'Netcdf4']
+            if self.verbose:
+                print(' '.join(cmd))
+            subprocess.check_output(cmd)
+        except subprocess.CalledProcessError as e:
+            print('An error occurred while generating the lat-lon mesh.')
+            print(e.output)
+            raise
+        try:
+            cmd = [os.path.join(self.path_to_remapper, 'GenerateCSMesh'),
+                   '--res', str(self._res), '--file', 'outCS.g']
+            if self.to_netcdf4:
+                cmd = cmd + ['--out_format', 'Netcdf4']
+            if self.verbose:
+                print(' '.join(cmd))
+            subprocess.check_output(cmd)
+        except subprocess.CalledProcessError as e:
+            print('An error occurred while generating the cube sphere mesh.')
+            print(e.output)
+            raise
+        try:
+            cmd = [os.path.join(self.path_to_remapper, 'GenerateOverlapMesh'),
+                   '--a', 'outLL.g', '--b', 'outCS.g', '--out', 'ov_LL_CS.g']
+            if self.to_netcdf4:
+                cmd = cmd + ['--out_format', 'Netcdf4']
+            if self.verbose:
+                print(' '.join(cmd))
+            subprocess.check_output(cmd)
+        except subprocess.CalledProcessError as e:
+            print('An error occurred while generating the overlap mesh.')
+            print(e.output)
+            raise
+        try:
+            cmd = [os.path.join(self.path_to_remapper, 'GenerateOfflineMap'),
+                   '--in_mesh', 'outLL.g', '--out_mesh', 'outCS.g', '--ov_mesh', 'ov_LL_CS.g',
+                   '--in_np', str(in_np), '--in_type', 'FV', '--out_type', 'FV', '--out_map', self.map]
+            if self.to_netcdf4:
+                cmd = cmd + ['--out_format', 'Netcdf4']
+            if self.verbose:
+                print(' '.join(cmd))
+            subprocess.check_output(cmd)
+        except subprocess.CalledProcessError as e:
+            print('An error occurred while generating the offline map.')
+            print(e.output)
+            raise
+        self._map_exists = True
+
+        print('CubeSphereRemap: generating offline inverse map...')
+        try:
+            cmd = [os.path.join(self.path_to_remapper, 'GenerateOverlapMesh'),
+                   '--a', 'outCS.g', '--b', 'outLL.g', '--out', 'ov_CS_LL.g']
+            if self.to_netcdf4:
+                cmd = cmd + ['--out_format', 'Netcdf4']
+            if self.verbose:
+                print(' '.join(cmd))
+            subprocess.check_output(cmd)
+        except subprocess.CalledProcessError as e:
+            print('An error occurred while generating the overlap mesh.')
+            print(e.output)
+            raise
+        try:
+            cmd = [os.path.join(self.path_to_remapper, 'GenerateOfflineMap'),
+                   '--in_mesh', 'outCS.g', '--out_mesh', 'outLL.g', '--ov_mesh', 'ov_CS_LL.g',
+                   '--in_np', str(in_np), '--in_type', 'FV', '--out_type', 'FV', '--out_map', self.inverse_map]
+            if self.to_netcdf4:
+                cmd = cmd + ['--out_format', 'Netcdf4']
+            if self.verbose:
+                print(' '.join(cmd))
+            subprocess.check_output(cmd)
+        except subprocess.CalledProcessError as e:
+            print('An error occurred while generating the offline map.')
+            print(e.output)
+            raise
+
+        if remove_meshes:
+            for f in ['outLL.g', 'outCS.g', 'ov_LL_CS.g', 'ov_CS_LL.g']:
+                os.remove(f)
+
+        self._inverse_map_exists = True
+        if self.verbose:
+            print('CubeSphereRemap: successfully generated offline maps (%s, %s)' % (self.map, self.inverse_map))
 
     def remap(self, input_file, output_file, *args):
         """

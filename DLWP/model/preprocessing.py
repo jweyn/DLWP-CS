@@ -441,7 +441,8 @@ class Preprocessor(object):
         self.data = result_ds
 
     def data_to_series(self, batch_samples=100, variables='all', levels='all', pairwise=False, scale_variables=False,
-                       chunk_size=1, in_memory=False, to_zarr=False, overwrite=False, verbose=False):
+                       chunk_size=1, in_memory=False, to_zarr=False, overwrite=False, verbose=False,
+                       no_string_coords=False):
         """
         Convert the data referenced by the data_obj in __init__ to a continuous time series of formatted data. This
         series of data is appropriate for use in a SeriesDataGenerator object during model training. Write data
@@ -462,6 +463,8 @@ class Preprocessor(object):
             and can be read just like netCDF with xarray.
         :param overwrite: bool: if True, overwrites any existing output files, otherwise, raises an error
         :param verbose: bool: print progress statements
+        :param no_string_coords: bool: if True, do not use string coordinates for the variable/level names. Only applies
+            when in_memory=False
         :return: opens Dataset on self.data
         """
         # Check chunk size
@@ -507,7 +510,7 @@ class Preprocessor(object):
         # Get the exact dataset we want (index times, variables, and levels)
         all_dates = self.raw_data.dataset_dates
         sel_levels = []
-        ds = self.raw_data.Dataset.sel(time=all_dates)
+        ds = self.raw_data.Dataset
         try:
             for l in levels:
                 if float(l) in self.raw_data.Dataset.level:
@@ -569,17 +572,25 @@ class Preprocessor(object):
             nc_fid.variables['lon'][:] = ds[lon_dim].values
 
             if pairwise:
-                nc_var = nc_fid.createVariable('varlev', str, 'varlev')
+                if no_string_coords:
+                    nc_var = nc_fid.createVariable('varlev', int, 'varlev')
+                    nc_fid.variables['varlev'][:] = np.arange(len(var_lev))
+                else:
+                    nc_var = nc_fid.createVariable('varlev', str, 'varlev')
+                    nc_fid.variables['varlev'][:] = np.array(var_lev, dtype='object')
                 nc_var.setncatts({
                     'long_name': 'Variable/level pair',
                 })
-                nc_fid.variables['varlev'][:] = np.array(var_lev, dtype='object')
             else:
-                nc_var = nc_fid.createVariable('variable', str, 'variable')
+                if no_string_coords:
+                    nc_var = nc_fid.createVariable('variable', int, 'variable')
+                    nc_fid.variables['variable'][:] = np.arange(len(variables))
+                else:
+                    nc_var = nc_fid.createVariable('variable', str, 'variable')
+                    nc_fid.variables['variable'][:] = np.array(variables, dtype='object')
                 nc_var.setncatts({
                     'long_name': 'Variable name',
                 })
-                nc_fid.variables['variable'][:] = np.array(variables, dtype='object')
 
                 nc_var = nc_fid.createVariable('level', np.float32, 'level')
                 nc_var.setncatts({

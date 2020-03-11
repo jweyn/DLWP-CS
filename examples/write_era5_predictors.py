@@ -9,24 +9,22 @@ Convert ERA5 data into preprocessed predictors/targets for the DLWP model.
 """
 
 from DLWP.data import ERA5Reanalysis
+from DLWP.data.era5 import pressure_variable_names as names, surface_variable_names
 from DLWP.model import Preprocessor
-from datetime import datetime
-import pandas as pd
 
-start_date = datetime(1979, 1, 1)
-end_date = datetime(2018, 12, 31)
-dates = list(pd.date_range(start_date, end_date, freq='D').to_pydatetime())
-variables = ['2m_temperature']
-levels = [0]
-data_root = '/home/disk/wave2/jweyn/Data'
+variables = ['geopotential', 'geopotential', '2m_temperature', 'total_column_water_vapour']
+levels = [500, 1000, 0, 0]
+data_root = '/home/disk/wave2/jweyn/Data/ERA5'
 
-era = ERA5Reanalysis(root_directory='%s/CFSR' % data_root, file_id='era5_2deg_3h')
-era.set_variables(variables)
-era.set_levels(levels)
+era = ERA5Reanalysis(root_directory=data_root, file_id='era5_1deg_3h')
+era.set_variables(list(set(variables)))
+era.set_levels(list(set(levels)))
 era.open()
+era.Dataset.load()
 
-pp = Preprocessor(era, predictor_file='%s/DLWP/era5_2deg_3h_1979-2018_t2m.nc' % data_root)
-pp.data_to_series(batch_samples=1000, variables='all', levels='all', pairwise=True,
-                  scale_variables=True, overwrite=False, verbose=True)
+names.update(surface_variable_names)
+pp = Preprocessor(era, predictor_file='../Data/era5_1deg_3h_1979-2018_z-t2-tcwv_500-1000.nc')
+pp.data_to_series(batch_samples=100000, variables=[names[v] for v in variables], levels=levels, pairwise=True,
+                  scale_variables=False, overwrite=False, verbose=True)
 print(pp.data)
 pp.close()

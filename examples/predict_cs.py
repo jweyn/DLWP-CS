@@ -61,21 +61,21 @@ constant_fields = [
 # you want to examine models that have different numbers of vertical levels but one predictor dataset contains
 # the data that all models need. Separate input and output selections are available for models using different inputs
 # and outputs. Also specify the number of input/output time steps in each model.
-input_selection = {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0']}
-output_selection = {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0']}
+input_selection = {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0', 'tcwv/0']}
+output_selection = {'varlev': ['z/500', 'tau/300-700', 'z/1000', 't2m/0', 'tcwv/0']}
 add_insolation = True
 input_time_steps = 2
 output_time_steps = 2
 
 # Selection of continuous dates in the data to use as input series.
-start_date = datetime(2017, 12, 1, 0)
+start_date = datetime(2017, 7, 1, 0)
 end_date = datetime(2018, 12, 31, 18)
 validation_set = pd.date_range(start_date, end_date, freq='6H')
 validation_set = np.array(validation_set, dtype='datetime64[ns]')
 
 # Select forecast initialization times. These are the actual forecast start times we will run the model and verification
 # for, and will also correspond to the comparison model forecast start times.
-dates = pd.date_range('2017-12-01', '2017-12-10', freq='D')
+dates = pd.date_range('2017-07-01', '2017-07-10', freq='D')
 initialization_dates = xr.DataArray(dates)
 
 # Number of forward integration weather forecast time steps
