@@ -15,7 +15,8 @@ import numpy as np
 import netCDF4 as nc
 import pandas as pd
 import xarray as xr
-from datetime import datetime, timedelta
+from datetime import datetime
+from copy import deepcopy
 try:
     import cdsapi
 except ImportError:
@@ -37,6 +38,18 @@ def _check_exists(file_name, path=False):
         return exists, local_file
     else:
         return exists
+
+
+def get_short_name(variables):
+    """
+    Return the short name of long-name variables.
+    """
+    all_variable_names = deepcopy(pressure_variable_names)
+    all_variable_names.update(surface_variable_names)
+    if isinstance(variables, str):
+        return all_variable_names[variables]
+    else:
+        return [all_variable_names[v] for v in variables]
 
 
 # For some reason, multiprocessing.Pool.map is placing arguments passed to the function inside another length-1 tuple.
