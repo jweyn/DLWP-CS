@@ -4,7 +4,7 @@
 
 ## Reference
 
-If you use this code or find it useful please cite our publication [(ArXiv link to come)](https://atmos.washington.edu/~jweyn).
+If you use this code or find it useful please cite [our publication](https://arxiv.org/abs/2003.11927) (peer-reviewed manuscript coming soon to JAMES).
 
 ## Getting started
 
