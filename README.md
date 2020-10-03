@@ -4,7 +4,7 @@
 
 ## Reference
 
-If you use this code or find it useful please cite [our publication](https://arxiv.org/abs/2003.11927) (peer-reviewed manuscript coming soon to JAMES).
+If you use this code or find it useful please cite [our publication](https://agupubs.onlinelibrary.wiley.com/doi/10.1029/2020MS002109) (also on [ArXiv](https://arxiv.org/abs/2003.11927)).
 
 ## Getting started
 
